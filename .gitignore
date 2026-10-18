@@ -1,0 +1,8 @@
+# Signing key and build output never go into this public repository.
+*.keystore
+*.jks
+keystore-password.txt
+sumber/pwa/
+sumber/android/build/
+*.apk
+*.idsig

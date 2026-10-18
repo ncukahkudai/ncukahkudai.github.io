@@ -7,7 +7,8 @@ tulis catatan per foto, lalu ekspor semuanya ke Google Earth (.kmz).
 
 - Foto dan catatan hanya tersimpan di HP (browser) yang dipakai, tidak dikirim ke server mana pun.
 - Bisa dipakai tanpa sinyal setelah dibuka sekali dengan internet.
-- Bisa dipasang ke layar utama: Chrome → menu ⋮ → *Install aplikasi* / *Tambahkan ke layar utama*.
+- Aplikasi Android: unduh https://ncukahkudai.github.io/apk/CatatanLapangan.apk (dibuat otomatis oleh GitHub Actions dari `android-twa/`, ditandatangani pemilik).
+- Bisa juga dipasang ke layar utama: Chrome → menu ⋮ → *Install aplikasi* / *Tambahkan ke layar utama*.
 
 ## Isi repository
 

@@ -1,11 +1,11 @@
 // Keeps the app usable offline in the field. Bump VERSION when files change.
 // Only this app's own files are cached; nothing is fetched from other servers.
-const VERSION = 'catatan-lapangan-v2';
+const VERSION = 'catatan-lapangan-v3';
 const CORE = ['./', 'index.html', 'app.css', 'app.js', 'jszip.min.js', 'manifest.webmanifest',
   'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(CORE.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));

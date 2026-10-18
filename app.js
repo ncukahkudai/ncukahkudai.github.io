@@ -40,14 +40,44 @@ let fix = null;
 // claude.ai pages cannot read live GPS; location then comes from the photo itself.
 const onClaude = !window.AndroidApp && !!window.claude?.use;
 function setGps(s, txt) { $('gps').dataset.s = s; $('gps').querySelector('span').textContent = txt; }
+const gpsListeners = new Set();
+const showFix = () => fix && setGps(fix.acc <= 10 ? 'ok' : 'warn', `GPS ±${Math.round(fix.acc)} m`);
 if ('geolocation' in navigator) {
   try {
     navigator.geolocation.watchPosition(p => {
       fix = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, alt: p.coords.altitude, time: Date.now() };
-      setGps(fix.acc <= 20 ? 'ok' : 'warn', `GPS ±${Math.round(fix.acc)} m`);
-    }, () => onClaude ? setGps('warn', 'Lokasi dari foto') : setGps('off', 'GPS tidak aktif'), { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+      if (!gpsListeners.size) showFix();
+      gpsListeners.forEach(f => f(fix));
+    }, () => onClaude ? setGps('warn', 'Lokasi dari foto') : setGps('off', 'GPS tidak aktif'), { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
   } catch { setGps('off', 'GPS tidak aktif'); }
 } else setGps('off', 'GPS tidak ada');
+
+// Averages readings, weighting each by 1/accuracy² and ignoring ones much worse than the best.
+function averageFix(list) {
+  if (!list.length) return null;
+  const best = Math.min(...list.map(f => f.acc));
+  const use = list.filter(f => f.acc <= Math.max(best * 1.5, best + 3));
+  let w = 0, lat = 0, lon = 0, alt = 0, altW = 0;
+  for (const f of use) {
+    const k = 1 / (f.acc * f.acc); w += k; lat += f.lat * k; lon += f.lon * k;
+    if (f.alt != null) { alt += f.alt * k; altW += k; }
+  }
+  return { lat: lat / w, lon: lon / w, acc: best, alt: altW ? alt / altW : null, n: use.length, time: Date.now() };
+}
+// Collects only readings that arrive from now on (never a stored old position).
+// Stops after `ms`, or earlier once a reading reaches `goodAcc` metres, unless `full` is set.
+function lockGps(ms, { goodAcc = 5, full = false, onProgress } = {}) {
+  return new Promise(resolve => {
+    const got = [];
+    const finish = () => { gpsListeners.delete(on); clearTimeout(timer); showFix(); resolve(averageFix(got)); };
+    const on = f => {
+      got.push(f); onProgress?.(got.length, averageFix(got));
+      if (!full && f.acc <= goodAcc && got.length >= 2) finish();
+    };
+    gpsListeners.add(on);
+    const timer = setTimeout(finish, ms);
+  });
+}
 
 /* ---------- EXIF GPS reader ---------- */
 function readExif(buf) {
@@ -232,10 +262,16 @@ async function addFiles(files, fromCamera) {
       const { blob, w, h } = await normalize(file);
       const it = { id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), blob, w, h,
         time: (!fromCamera && exifDate(ex.date)) || file.lastModified || Date.now(), title: '', note: '', lat: null, lon: null, acc: null, alt: null, src: null };
-      const fresh = fix && Date.now() - fix.time < 120000;
-      if (fromCamera && fresh) Object.assign(it, { lat: fix.lat, lon: fix.lon, acc: fix.acc, alt: fix.alt, src: 'gps' });
+      let live = null;
+      if (fromCamera && fix) {
+        toast('Mengunci GPS… tetap di titik foto sebentar.', 9000);
+        setGps('wait', 'Mengunci GPS…');
+        live = await lockGps(8000, { onProgress: (n, a) => setGps('wait', `Mengunci GPS ±${Math.round(a.acc)} m`) });
+        if (!live && Date.now() - fix.time < 20000) live = fix;
+        $('toast').hidden = true;
+      }
+      if (live) Object.assign(it, { lat: live.lat, lon: live.lon, acc: live.acc, alt: live.alt, n: live.n || 1, src: 'gps' });
       else if (ex.lat != null) Object.assign(it, { lat: ex.lat, lon: ex.lon, alt: ex.alt ?? null, src: 'exif' });
-      else if (fromCamera && fix) Object.assign(it, { lat: fix.lat, lon: fix.lon, acc: fix.acc, alt: fix.alt, src: 'gps' });
       if (fromCamera) it.time = Date.now();
       if (it.lat == null) noLoc++;
       await put(it); items.unshift(it); added++;
@@ -259,7 +295,7 @@ function syncSheet() {
     const a = $(id); if (has) a.href = fn(cur); else a.removeAttribute('href'); a.classList.toggle('busy', !has);
   }
   $('coordNote').className = 'note';
-  $('coordNote').textContent = has ? `Sumber: ${SRC[cur.src] || '-'}${cur.acc ? ` · akurasi ±${Math.round(cur.acc)} m` : ''}${cur.alt != null ? ` · elevasi ${Math.round(cur.alt)} m` : ''}` : 'Foto ini belum punya lokasi. Isi koordinat (bisa ditempel dari Google Earth/Maps) atau tekan "Pakai GPS sekarang".';
+  $('coordNote').textContent = has ? `Sumber: ${SRC[cur.src] || '-'}${cur.acc ? ` · akurasi ±${Math.round(cur.acc)} m` : ''}${cur.n > 1 ? ` · rata-rata ${cur.n} bacaan` : ''}${cur.alt != null ? ` · elevasi ${Math.round(cur.alt)} m` : ''}` : 'Foto ini belum punya lokasi. Isi koordinat (bisa ditempel dari Google Earth/Maps) atau tekan "Kunci GPS di titik ini".';
 }
 function openSheet(id) {
   cur = items.find(i => i.id === id); if (!cur) return;
@@ -277,13 +313,20 @@ $('fCoord').addEventListener('change', e => {
   if (!v) { Object.assign(cur, { lat: null, lon: null, acc: null, src: null }); syncSheet(); queueSave(); return; }
   const p = parseCoord(v);
   if (!p) { $('coordNote').className = 'note err'; $('coordNote').textContent = 'Format tidak dikenali. Contoh: -6.917464, 107.619123 atau 6°55\'02.9"S 107°37\'08.8"E'; return; }
-  Object.assign(cur, { lat: p.lat, lon: p.lon, acc: null, alt: null, src: 'manual' });
+  Object.assign(cur, { lat: p.lat, lon: p.lon, acc: null, alt: null, n: 0, src: 'manual' });
   e.target.value = fmtCoord(cur); syncSheet(); queueSave();
 });
-$('useGps').addEventListener('click', () => {
+$('useGps').addEventListener('click', async () => {
   if (!fix) { toast('GPS belum mendapat posisi. Pastikan izin lokasi aktif dan tunggu sebentar.'); return; }
-  Object.assign(cur, { lat: fix.lat, lon: fix.lon, acc: fix.acc, alt: fix.alt, src: 'gps' });
-  $('fCoord').value = fmtCoord(cur); syncSheet(); queueSave(); toast('Lokasi GPS dipakai.');
+  const btn = $('useGps'), label = btn.textContent, target = cur;
+  btn.classList.add('busy');
+  toast('Berdiri diam tepat di titik foto. GPS dirata-rata selama 15 detik.', 4000);
+  const a = await lockGps(15000, { full: true, onProgress: (n, avg) => { btn.textContent = `Merata-rata… ${n} bacaan ±${Math.round(avg.acc)} m`; } });
+  btn.textContent = label; btn.classList.remove('busy');
+  if (!a) { toast('Tidak ada bacaan GPS baru. Coba di tempat terbuka.'); return; }
+  Object.assign(target, { lat: a.lat, lon: a.lon, acc: a.acc, alt: a.alt, n: a.n, src: 'gps' });
+  if (cur === target) { $('fCoord').value = fmtCoord(cur); syncSheet(); }
+  put(target); toast(`Lokasi dikunci dari ${a.n} bacaan GPS (±${Math.round(a.acc)} m).`);
 });
 $('copyCoord').addEventListener('click', async () => {
   if (cur.lat == null) return;
@@ -307,6 +350,43 @@ $('doneBtn').addEventListener('click', async () => {
 });
 
 /* ---------- KMZ export ---------- */
+function wrapText(g, text, maxW, maxLines) {
+  const out = [];
+  for (const para of String(text || '').split('\n')) {
+    let line = '';
+    for (const word of para.split(/\s+/)) {
+      if (!word) continue;
+      const t = line ? line + ' ' + word : word;
+      if (line && g.measureText(t).width > maxW) { out.push(line); line = word; } else line = t;
+    }
+    if (line) out.push(line);
+  }
+  if (out.length > maxLines) { out.length = maxLines; out[maxLines - 1] = out[maxLines - 1].replace(/\s*\S*$/, '') + ' …'; }
+  return out;
+}
+// A square card (photo, title, note, coordinates) that Google Earth shows when the pointer is over a point.
+async function hoverCard(it, title) {
+  const url = URL.createObjectURL(it.blob);
+  try {
+    const img = await loadImg(url);
+    const S = 512, PH = 300, c = document.createElement('canvas'); c.width = S; c.height = S;
+    const g = c.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, S, S);
+    const k = Math.max(S / img.naturalWidth, PH / img.naturalHeight), w = img.naturalWidth * k, h = img.naturalHeight * k;
+    g.save(); g.beginPath(); g.rect(0, 0, S, PH); g.clip(); g.drawImage(img, (S - w) / 2, (PH - h) / 2, w, h); g.restore();
+    g.fillStyle = '#d9531a'; g.fillRect(0, PH, S, 5);
+    g.fillStyle = '#1c2419'; g.textBaseline = 'top';
+    g.font = 'bold 26px Arial, sans-serif';
+    g.fillText(wrapText(g, title, S - 32, 1)[0] || '', 16, PH + 16, S - 32);
+    g.font = '20px Arial, sans-serif'; g.fillStyle = '#333a30';
+    wrapText(g, it.note || '(tanpa catatan)', S - 32, 4).forEach((l, i) => g.fillText(l, 16, PH + 54 + i * 25, S - 32));
+    g.font = '15px "Courier New", monospace'; g.fillStyle = '#5d6a58';
+    g.fillText(`${fmtCoord(it)}${it.acc ? ' ±' + Math.round(it.acc) + ' m' : ''} · ${fmtTime(it.time)}`, 16, S - 26, S - 32);
+    g.strokeStyle = '#1c2419'; g.lineWidth = 3; g.strokeRect(1.5, 1.5, S - 3, S - 3);
+    return await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+  } finally { URL.revokeObjectURL(url); }
+}
+
 $('exportBtn').addEventListener('click', async () => {
   const pts = items.filter(i => i.lat != null).slice().sort((a, b) => a.time - b.time);
   if (!pts.length) return;
@@ -318,8 +398,10 @@ $('exportBtn').addEventListener('click', async () => {
     const cd = s => String(s ?? '').replace(/]]>/g, ']]&gt;');
     let pm = '';
     for (let i = 0; i < pts.length; i++) {
-      const it = pts[i], fn = `foto-${pad(i + 1, 3)}.jpg`;
+      const it = pts[i], fn = `foto-${pad(i + 1, 3)}.jpg`, card = `kartu-${pad(i + 1, 3)}.jpg`;
+      const title = it.title || 'Foto ' + (i + 1);
       files.file(fn, await stamped(it));
+      files.file(card, await hoverCard(it, title));
       const html = `<div style="font-family:Arial,sans-serif;max-width:520px">
 <img src="files/${fn}" width="500"><br>
 <b>${esc(it.title || 'Foto ' + (i + 1))}</b><br>
@@ -328,7 +410,15 @@ ${esc(it.note).replace(/\n/g, '<br>')}<br><br>
       pm += `
   <Placemark>
     <name>${esc(it.title || 'Foto ' + (i + 1))}</name>
-    <styleUrl>#foto</styleUrl>
+    <Snippet maxLines="2">${esc((it.note || '').slice(0, 140))}</Snippet>
+    <StyleMap>
+      <Pair><key>normal</key><styleUrl>#foto</styleUrl></Pair>
+      <Pair><key>highlight</key><Style>
+        <IconStyle><scale>9</scale><Icon><href>files/${card}</href></Icon><hotSpot x="0.5" y="0" xunits="fraction" yunits="fraction"/></IconStyle>
+        <LabelStyle><scale>0</scale></LabelStyle>
+        <BalloonStyle><text>$[description]</text></BalloonStyle>
+      </Style></Pair>
+    </StyleMap>
     <description><![CDATA[${cd(html)}]]></description>
     <ExtendedData>
       <Data name="catatan"><value>${esc(it.note)}</value></Data>
@@ -345,6 +435,7 @@ ${esc(it.note).replace(/\n/g, '<br>')}<br><br>
   <name>${esc(name)}</name>
   <Style id="foto">
     <IconStyle><scale>1.1</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/camera.png</href></Icon></IconStyle>
+    <LabelStyle><scale>0.8</scale></LabelStyle>
     <BalloonStyle><text>$[description]</text></BalloonStyle>
   </Style>
   <Folder><name>Foto survey (${pts.length})</name>${pm}
@@ -375,6 +466,8 @@ window.addEventListener('appinstalled', () => { $('installBtn').hidden = true; }
 let tipSeen = false; try { tipSeen = localStorage.getItem('cl-iostip') === '1'; } catch {}
 if (!native && !standalone && !inArtifact() && /iphone|ipad|ipod/i.test(navigator.userAgent) && !tipSeen) $('iosTip').hidden = false;
 $('iosTipX').addEventListener('click', () => { $('iosTip').hidden = true; try { localStorage.setItem('cl-iostip', '1'); } catch {} });
+// When a new version takes over, reload once so the installed app shows it.
+try { if (!native && navigator.serviceWorker?.controller) navigator.serviceWorker.addEventListener('controllerchange', () => location.reload()); } catch {}
 try { if (!native && 'serviceWorker' in navigator && !inArtifact() && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {}); } catch {}
 
 if (onClaude) $('hint').textContent = 'Di halaman ini lokasi diambil dari data GPS di dalam foto. Nyalakan "Tag lokasi" di setelan aplikasi Kamera HP. Foto tanpa lokasi bisa diisi koordinatnya secara manual.';

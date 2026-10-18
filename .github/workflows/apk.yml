@@ -1,0 +1,33 @@
+# Builds the Android app (unsigned) on GitHub's servers and commits it to apk/.
+# The owner signs it with their private key outside this repository.
+name: Build APK
+on:
+  push:
+    paths: ["android-twa/**", ".github/workflows/apk.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.9" }
+      - name: Build
+        run: |
+          set -o pipefail
+          gradle -p android-twa assembleRelease --no-daemon 2>&1 | tee build.log
+      - name: Commit APK (or the log when the build fails)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p apk
+          cp build.log apk/build.log || true
+          cp android-twa/app/build/outputs/apk/release/app-release-unsigned.apk apk/CatatanLapangan-unsigned.apk || true
+          git add -f apk/
+          git commit -m "Hasil build APK (${{ job.status }}) [skip ci]" || exit 0
+          git push

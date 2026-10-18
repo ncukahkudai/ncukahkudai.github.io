@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.catatanlapangan.survey",
+    "sha256_cert_fingerprints": ["3D:6E:CA:8A:B5:9D:9E:B2:D7:5C:EC:95:D1:40:05:E0:1D:B3:38:11:E7:E3:CC:08:CA:83:E4:01:08:08:AA:7D"]
+  }
+}]

@@ -625,7 +625,20 @@ try { if (!native && 'serviceWorker' in navigator && !inArtifact() && location.p
 if (onClaude) $('hint').textContent = 'Di halaman ini lokasi diambil dari data GPS di dalam foto. Nyalakan "Tag lokasi" di setelan aplikasi Kamera HP. Foto tanpa lokasi bisa diisi koordinatnya secara manual.';
 
 // Android back button: close the open photo first.
-window.__clBack = () => { if (!$('exportSheet').hidden) { $('exportSheet').hidden = true; return true; } if ($('sheet').hidden) return false; $('doneBtn').click(); return true; };
+/* ---------- exit ---------- */
+// A page may close itself only when the system allows it (e.g. the installed app with no page history);
+// otherwise show that everything is saved and how to leave.
+$('exitBtn').hidden = onClaude;
+$('exitBtn').addEventListener('click', async () => {
+  clearTimeout(saveT);
+  try { if (cur) await put(cur); } catch {}
+  if (native?.exit) { native.exit(); return; }
+  try { window.close(); } catch {}
+  setTimeout(() => { if (!document.hidden) $('exitDone').hidden = false; }, 400);
+});
+$('exitStay').addEventListener('click', () => { $('exitDone').hidden = true; });
+
+window.__clBack = () => { if (!$('exitDone').hidden) { $('exitDone').hidden = true; return true; } if (!$('exportSheet').hidden) { $('exportSheet').hidden = true; return true; } if ($('sheet').hidden) return false; $('doneBtn').click(); return true; };
 
 getAll().then(all => {
   items = all.sort((a, b) => b.time - a.time); render();

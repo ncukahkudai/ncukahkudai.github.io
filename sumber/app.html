@@ -99,6 +99,13 @@ label.f textarea{min-height:150px;resize:vertical}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:30;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;max-width:calc(100% - 32px)}
 .busy{opacity:.6;pointer-events:none}
 #installBtn{padding:6px 12px;font-size:13px}
+.btn.exit{padding:5px 10px;font-size:13px;gap:5px;order:1;margin-left:auto}
+.top .survey,.top .gps,#installBtn{order:2}
+@media (min-width:641px){.btn.exit{order:3;margin-left:0}}
+.btn.exit svg{width:16px;height:16px}
+.exit-done{position:fixed;inset:0;z-index:40;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px max(16px,env(safe-area-inset-left,0px))}
+.exit-done h2{margin:0;font-family:var(--f-display);font-size:26px;text-transform:uppercase;letter-spacing:.03em}
+.exit-done p{margin:0;color:var(--muted);max-width:32ch}
 .install-tip{font-size:13px;color:var(--muted);padding-block:0 10px}
 .linkish{background:none;border:0;color:var(--accent);font-weight:600;cursor:pointer;padding:0 4px}
 @media (max-width:640px){.edit{grid-template-columns:1fr}.capture{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr 1fr;gap:10px}.body p{-webkit-line-clamp:2}}
@@ -111,6 +118,10 @@ label.f textarea{min-height:150px;resize:vertical}
   <input id="surveyName" class="survey" aria-label="Nama survey" placeholder="Nama survey, mis. Survey Saluran Cikapundung">
   <div id="gps" class="gps" data-s="wait" title="Status GPS"><i></i><span>Mencari GPS…</span></div>
   <button class="btn primary" id="installBtn" hidden>Install aplikasi</button>
+  <button class="btn exit" id="exitBtn" aria-label="Keluar dari aplikasi">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg>
+    Keluar
+  </button>
 </div>
 <div class="wrap install-tip" id="iosTip" hidden>Untuk install di iPhone: ketuk tombol <b>Bagikan</b> di Safari, lalu pilih <b>Tambah ke Layar Utama</b>. <button class="linkish" id="iosTipX">Tutup</button></div>
 </header>
@@ -196,6 +207,12 @@ label.f textarea{min-height:150px;resize:vertical}
     <label class="check"><input type="checkbox" id="withPhotos" checked><span>Sertakan foto untuk Shapefile, GeoJSON, dan CSV (dikemas dalam .zip bersama folder <code>foto</code>)</span></label>
     <p class="note">Koordinat memakai WGS 84 (EPSG:4326). Kolom UTM dihitung untuk zona masing-masing titik.</p>
   </div>
+</div>
+
+<div id="exitDone" class="exit-done" hidden>
+  <h2>Data sudah tersimpan</h2>
+  <p>Semua foto dan catatan aman di HP ini. Tekan tombol <b>Beranda</b> atau <b>Kembali</b> di HP untuk keluar.</p>
+  <button class="btn primary" id="exitStay">Lanjut bekerja</button>
 </div>
 
 <div id="toast" class="toast" hidden></div>
@@ -828,7 +845,20 @@ try { if (!native && 'serviceWorker' in navigator && !inArtifact() && location.p
 if (onClaude) $('hint').textContent = 'Di halaman ini lokasi diambil dari data GPS di dalam foto. Nyalakan "Tag lokasi" di setelan aplikasi Kamera HP. Foto tanpa lokasi bisa diisi koordinatnya secara manual.';
 
 // Android back button: close the open photo first.
-window.__clBack = () => { if (!$('exportSheet').hidden) { $('exportSheet').hidden = true; return true; } if ($('sheet').hidden) return false; $('doneBtn').click(); return true; };
+/* ---------- exit ---------- */
+// A page may close itself only when the system allows it (e.g. the installed app with no page history);
+// otherwise show that everything is saved and how to leave.
+$('exitBtn').hidden = onClaude;
+$('exitBtn').addEventListener('click', async () => {
+  clearTimeout(saveT);
+  try { if (cur) await put(cur); } catch {}
+  if (native?.exit) { native.exit(); return; }
+  try { window.close(); } catch {}
+  setTimeout(() => { if (!document.hidden) $('exitDone').hidden = false; }, 400);
+});
+$('exitStay').addEventListener('click', () => { $('exitDone').hidden = true; });
+
+window.__clBack = () => { if (!$('exitDone').hidden) { $('exitDone').hidden = true; return true; } if (!$('exportSheet').hidden) { $('exportSheet').hidden = true; return true; } if ($('sheet').hidden) return false; $('doneBtn').click(); return true; };
 
 getAll().then(all => {
   items = all.sort((a, b) => b.time - a.time); render();

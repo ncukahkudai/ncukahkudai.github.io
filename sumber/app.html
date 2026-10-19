@@ -87,6 +87,15 @@ label.f textarea{min-height:150px;resize:vertical}
 .note.err{color:var(--bad)}
 .confirm{border:1px solid var(--bad);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
 
+.exp{display:flex;flex-direction:column;gap:14px;padding-block:16px 40px;max-width:640px}
+.fmt-list{display:flex;flex-direction:column;gap:10px}
+.fmt{display:grid;grid-template-columns:1fr auto;gap:2px 12px;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;cursor:pointer}
+.fmt:hover{border-color:var(--accent)}
+.fmt-name{font-weight:600;font-size:16px}
+.fmt .ext{font-family:var(--f-mono);font-size:12px;color:var(--accent);align-self:center}
+.fmt small{grid-column:1 / -1;color:var(--muted);font-size:13px}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:14px}
+.check input{margin-top:3px;accent-color:var(--accent)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:30;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;max-width:calc(100% - 32px)}
 .busy{opacity:.6;pointer-events:none}
 #installBtn{padding:6px 12px;font-size:13px}
@@ -127,7 +136,7 @@ label.f textarea{min-height:150px;resize:vertical}
   <div class="count" id="count"></div>
   <button class="btn primary" id="exportBtn">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>
-    Ekspor ke Google Earth
+    Ekspor
   </button>
 </div></div>
 
@@ -162,6 +171,30 @@ label.f textarea{min-height:150px;resize:vertical}
         <div class="row"><button class="btn" id="delNo">Batal</button><button class="btn primary" id="delYes">Ya, hapus</button></div>
       </div>
     </div>
+  </div>
+</div>
+
+<div id="exportSheet" class="sheet" hidden>
+  <div class="head"><div class="wrap">
+    <h2>Ekspor data</h2>
+    <button class="btn" id="exportClose">Tutup</button>
+  </div></div>
+  <div class="wrap exp">
+    <p class="note" id="expSummary"></p>
+    <div class="fmt-list">
+      <button class="fmt" data-fmt="kmz"><span class="fmt-name">Google Earth</span><span class="ext">.kmz</span>
+        <small>Foto, judul, dan catatan muncul saat kursor di atas titik. Untuk Google Earth Pro, web, dan HP.</small></button>
+      <button class="fmt" data-fmt="shp"><span class="fmt-name">Shapefile</span><span class="ext">.shp (.zip)</span>
+        <small>Untuk QGIS, ArcGIS, Global Mapper. Titik WGS 84 dengan atribut judul, catatan, UTM, akurasi.</small></button>
+      <button class="fmt" data-fmt="geojson"><span class="fmt-name">GeoJSON</span><span class="ext">.geojson</span>
+        <small>Untuk QGIS, peta web, dan geojson.io.</small></button>
+      <button class="fmt" data-fmt="csv"><span class="fmt-name">Tabel CSV / Excel</span><span class="ext">.csv</span>
+        <small>Daftar titik dengan lintang-bujur, koordinat UTM, waktu, dan catatan.</small></button>
+      <button class="fmt" data-fmt="gpx"><span class="fmt-name">GPX</span><span class="ext">.gpx</span>
+        <small>Titik (waypoint) untuk GPS Garmin, Avenza Maps, OsmAnd.</small></button>
+    </div>
+    <label class="check"><input type="checkbox" id="withPhotos" checked><span>Sertakan foto untuk Shapefile, GeoJSON, dan CSV (dikemas dalam .zip bersama folder <code>foto</code>)</span></label>
+    <p class="note">Koordinat memakai WGS 84 (EPSG:4326). Kolom UTM dihitung untuk zona masing-masing titik.</p>
   </div>
 </div>
 
@@ -557,71 +590,223 @@ async function hoverCard(it, title) {
   } finally { URL.revokeObjectURL(url); }
 }
 
-$('exportBtn').addEventListener('click', async () => {
-  const pts = items.filter(i => i.lat != null).slice().sort((a, b) => a.time - b.time);
-  if (!pts.length) return;
-  if (!window.JSZip) { toast('Pustaka ekspor belum termuat. Periksa koneksi internet lalu coba lagi.'); return; }
-  const btn = $('exportBtn'); btn.classList.add('busy');
-  try {
-    const name = $('surveyName').value.trim() || 'Survey lapangan';
-    const zip = new JSZip(); const files = zip.folder('files');
-    const cd = s => String(s ?? '').replace(/]]>/g, ']]&gt;');
-    let pm = '';
-    for (let i = 0; i < pts.length; i++) {
-      const it = pts[i], fn = `foto-${pad(i + 1, 3)}.jpg`, card = `kartu-${pad(i + 1, 3)}.jpg`;
-      const title = it.title || 'Foto ' + (i + 1);
-      files.file(fn, await stamped(it));
-      files.file(card, await hoverCard(it, title));
-      const html = `<div style="font-family:Arial,sans-serif;max-width:520px">
+const exportPoints = () => items.filter(i => i.lat != null).slice().sort((a, b) => a.time - b.time);
+const photoName = i => `foto-${pad(i + 1, 3)}.jpg`;
+const localStamp = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+
+// WGS 84 latitude/longitude to UTM (Transverse Mercator series, accurate to millimetres within a zone).
+function toUTM(lat, lon) {
+  const zone = Math.min(60, Math.floor((lon + 180) / 6) + 1);
+  const a = 6378137, f = 1 / 298.257223563, k0 = 0.9996, e2 = f * (2 - f), ep2 = e2 / (1 - e2);
+  const phi = lat * Math.PI / 180, dl = (lon - ((zone - 1) * 6 - 177)) * Math.PI / 180;
+  const sin = Math.sin(phi), cos = Math.cos(phi), tan = Math.tan(phi);
+  const N = a / Math.sqrt(1 - e2 * sin * sin), T = tan * tan, C = ep2 * cos * cos, A = cos * dl;
+  const M = a * ((1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256) * phi - (3 * e2 / 8 + 3 * e2 ** 2 / 32 + 45 * e2 ** 3 / 1024) * Math.sin(2 * phi)
+    + (15 * e2 ** 2 / 256 + 45 * e2 ** 3 / 1024) * Math.sin(4 * phi) - (35 * e2 ** 3 / 3072) * Math.sin(6 * phi));
+  const x = 500000 + k0 * N * (A + (1 - T + C) * A ** 3 / 6 + (5 - 18 * T + T * T + 72 * C - 58 * ep2) * A ** 5 / 120);
+  const y = k0 * (M + N * tan * (A * A / 2 + (5 - T + 9 * C + 4 * C * C) * A ** 4 / 24 + (61 - 58 * T + T * T + 600 * C - 330 * ep2) * A ** 6 / 720));
+  return { zone: zone + (lat < 0 ? 'S' : 'N'), x, y: lat < 0 ? y + 10000000 : y };
+}
+
+function exportRows(pts) {
+  return pts.map((it, i) => {
+    const u = toUTM(it.lat, it.lon);
+    return { no: i + 1, judul: it.title || 'Foto ' + (i + 1), catatan: it.note || '', lat: it.lat, lon: it.lon,
+      zona: u.zone, utmX: u.x, utmY: u.y, akurasi: it.acc ?? null, elevasi: it.alt ?? null,
+      waktu: localStamp(it.time), sumber: SRC[it.src] || '', foto: photoName(i) };
+  });
+}
+
+async function buildKmz(pts, name) {
+  const zip = new JSZip(); const files = zip.folder('files');
+  const cd = s => String(s ?? '').replace(/]]>/g, ']]&gt;');
+  let pm = '';
+  for (let i = 0; i < pts.length; i++) {
+    const it = pts[i], fn = `foto-${pad(i + 1, 3)}.jpg`, card = `kartu-${pad(i + 1, 3)}.jpg`;
+    const title = it.title || 'Foto ' + (i + 1);
+    files.file(fn, await stamped(it));
+    files.file(card, await hoverCard(it, title));
+    const html = `<div style="font-family:Arial,sans-serif;max-width:520px">
 <img src="files/${fn}" width="500"><br>
 <b>${esc(it.title || 'Foto ' + (i + 1))}</b><br>
 ${esc(it.note).replace(/\n/g, '<br>')}<br><br>
 <small>${fmtCoord(it)}${it.acc ? ' ±' + Math.round(it.acc) + ' m' : ''} · ${fmtTime(it.time)} · sumber: ${SRC[it.src] || '-'}</small></div>`;
-      pm += `
-  <Placemark>
-    <name>${esc(it.title || 'Foto ' + (i + 1))}</name>
-    <Snippet maxLines="2">${esc((it.note || '').slice(0, 140))}</Snippet>
-    <StyleMap>
-      <Pair><key>normal</key><styleUrl>#foto</styleUrl></Pair>
-      <Pair><key>highlight</key><Style>
-        <IconStyle><scale>9</scale><Icon><href>files/${card}</href></Icon><hotSpot x="0.5" y="0" xunits="fraction" yunits="fraction"/></IconStyle>
-        <LabelStyle><scale>0</scale></LabelStyle>
-        <BalloonStyle><text>$[description]</text></BalloonStyle>
-      </Style></Pair>
-    </StyleMap>
-    <description><![CDATA[${cd(html)}]]></description>
-    <ExtendedData>
-      <Data name="catatan"><value>${esc(it.note)}</value></Data>
-      <Data name="waktu"><value>${new Date(it.time).toISOString()}</value></Data>
-      <Data name="akurasi_m"><value>${it.acc ? Math.round(it.acc) : ''}</value></Data>
-      <Data name="foto"><value>files/${fn}</value></Data>
-    </ExtendedData>
-    <Point><coordinates>${it.lon},${it.lat},0</coordinates></Point>
-  </Placemark>`;
-    }
-    const kml = `<?xml version="1.0" encoding="UTF-8"?>
+    pm += `
+<Placemark>
+  <name>${esc(it.title || 'Foto ' + (i + 1))}</name>
+  <Snippet maxLines="2">${esc((it.note || '').slice(0, 140))}</Snippet>
+  <StyleMap>
+    <Pair><key>normal</key><styleUrl>#foto</styleUrl></Pair>
+    <Pair><key>highlight</key><Style>
+      <IconStyle><scale>9</scale><Icon><href>files/${card}</href></Icon><hotSpot x="0.5" y="0" xunits="fraction" yunits="fraction"/></IconStyle>
+      <LabelStyle><scale>0</scale></LabelStyle>
+      <BalloonStyle><text>$[description]</text></BalloonStyle>
+    </Style></Pair>
+  </StyleMap>
+  <description><![CDATA[${cd(html)}]]></description>
+  <ExtendedData>
+    <Data name="catatan"><value>${esc(it.note)}</value></Data>
+    <Data name="waktu"><value>${new Date(it.time).toISOString()}</value></Data>
+    <Data name="akurasi_m"><value>${it.acc ? Math.round(it.acc) : ''}</value></Data>
+    <Data name="foto"><value>files/${fn}</value></Data>
+  </ExtendedData>
+  <Point><coordinates>${it.lon},${it.lat},0</coordinates></Point>
+</Placemark>`;
+  }
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-  <name>${esc(name)}</name>
-  <Style id="foto">
-    <IconStyle><scale>1.1</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/camera.png</href></Icon></IconStyle>
-    <LabelStyle><scale>0.8</scale></LabelStyle>
-    <BalloonStyle><text>$[description]</text></BalloonStyle>
-  </Style>
-  <Folder><name>Foto survey (${pts.length})</name>${pm}
-  </Folder>
+<name>${esc(name)}</name>
+<Style id="foto">
+  <IconStyle><scale>1.1</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/camera.png</href></Icon></IconStyle>
+  <LabelStyle><scale>0.8</scale></LabelStyle>
+  <BalloonStyle><text>$[description]</text></BalloonStyle>
+</Style>
+<Folder><name>Foto survey (${pts.length})</name>${pm}
+</Folder>
 </Document>
 </kml>`;
-    zip.file('doc.kml', kml);
-    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', mimeType: 'application/vnd.google-earth.kmz' });
-    const base = `${slug(name)}-${new Date().toISOString().slice(0, 10)}`;
-    // The artifact viewer only saves allowlisted extensions; .zip is the same bytes as .kmz.
-    const ok = await saveFile(base + (inArtifact() ? '.zip' : '.kmz'), blob, true);
-    const skipped = items.length - pts.length;
-    if (ok && !native) toast((inArtifact() ? 'Tersimpan sebagai .zip — ganti ekstensinya menjadi .kmz lalu buka di Google Earth.' : 'File .kmz siap. Buka di Google Earth.') + (skipped ? ` ${skipped} foto tanpa lokasi tidak ikut.` : ''), 7000);
-  } catch (e) { toast('Ekspor gagal: ' + (e?.message || e)); }
-  finally { btn.classList.remove('busy'); }
+  zip.file('doc.kml', kml);
+  return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', mimeType: 'application/vnd.google-earth.kmz' });
+}
+
+function buildCsv(rows) {
+  const q = v => { v = v == null ? '' : String(v); return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const head = ['no', 'judul', 'catatan', 'lintang', 'bujur', 'utm_zona', 'utm_x', 'utm_y', 'akurasi_m', 'elevasi_m', 'waktu', 'sumber', 'foto'];
+  const lines = rows.map(r => [r.no, r.judul, r.catatan, r.lat.toFixed(7), r.lon.toFixed(7), r.zona, r.utmX.toFixed(2), r.utmY.toFixed(2),
+    r.akurasi != null ? r.akurasi.toFixed(1) : '', r.elevasi != null ? r.elevasi.toFixed(1) : '', r.waktu, r.sumber, r.foto].map(q).join(','));
+  return '\ufeff' + [head.join(','), ...lines].join('\r\n') + '\r\n';  // BOM so Excel reads UTF-8
+}
+
+function buildGeoJson(rows, withPhotos) {
+  const r1 = (v, d) => v == null ? null : Math.round(v * 10 ** d) / 10 ** d;
+  return JSON.stringify({ type: 'FeatureCollection', features: rows.map(r => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [r1(r.lon, 8), r1(r.lat, 8)] },
+    properties: { no: r.no, judul: r.judul, catatan: r.catatan, utm_zona: r.zona, utm_x: r1(r.utmX, 2), utm_y: r1(r.utmY, 2),
+      akurasi_m: r1(r.akurasi, 1), elevasi_m: r1(r.elevasi, 1), waktu: r.waktu, sumber: r.sumber, foto: withPhotos ? 'foto/' + r.foto : null }
+  })) }, null, 2);
+}
+
+function buildGpx(rows, pts, name) {
+  const wpt = rows.map((r, i) => `  <wpt lat="${r.lat.toFixed(8)}" lon="${r.lon.toFixed(8)}">${pts[i].alt != null ? `<ele>${pts[i].alt.toFixed(1)}</ele>` : ''}`
+    + `<time>${new Date(pts[i].time).toISOString()}</time><name>${esc(r.judul)}</name><desc>${esc(r.catatan)}</desc><sym>Flag, Blue</sym></wpt>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Catatan Lapangan" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>${esc(name)}</name></metadata>
+${wpt}
+</gpx>
+`;
+}
+
+// ESRI Shapefile (point, WGS 84): .shp geometry, .shx index, .dbf attributes, .prj and .cpg (UTF-8).
+const WGS84_PRJ = 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]';
+function buildShapefile(rows) {
+  const n = rows.length, shpLen = 100 + n * 28, shxLen = 100 + n * 8;
+  const shp = new DataView(new ArrayBuffer(shpLen)), shx = new DataView(new ArrayBuffer(shxLen));
+  const xs = rows.map(r => r.lon), ys = rows.map(r => r.lat);
+  const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  for (const [v, len] of [[shp, shpLen], [shx, shxLen]]) {
+    v.setInt32(0, 9994); v.setInt32(24, len / 2); v.setInt32(28, 1000, true); v.setInt32(32, 1, true);
+    box.forEach((b, k) => v.setFloat64(36 + k * 8, b, true));
+  }
+  rows.forEach((r, i) => {
+    const o = 100 + i * 28;
+    shp.setInt32(o, i + 1); shp.setInt32(o + 4, 10);
+    shp.setInt32(o + 8, 1, true); shp.setFloat64(o + 12, r.lon, true); shp.setFloat64(o + 20, r.lat, true);
+    shx.setInt32(100 + i * 8, o / 2); shx.setInt32(104 + i * 8, 10);
+  });
+  return { shp: shp.buffer, shx: shx.buffer, dbf: buildDbf(rows) };
+}
+function buildDbf(rows) {
+  const F = [['NO', 'N', 5, 0], ['JUDUL', 'C', 100, 0], ['CATATAN', 'C', 254, 0], ['LINTANG', 'N', 13, 8], ['BUJUR', 'N', 13, 8],
+    ['UTM_ZONA', 'C', 4, 0], ['UTM_X', 'N', 12, 2], ['UTM_Y', 'N', 12, 2], ['AKURASI_M', 'N', 7, 1], ['ELEVASI_M', 'N', 8, 1],
+    ['WAKTU', 'C', 19, 0], ['SUMBER', 'C', 10, 0], ['FOTO', 'C', 40, 0]];
+  const enc = new TextEncoder();
+  const recLen = 1 + F.reduce((t, f) => t + f[2], 0), headLen = 32 + 32 * F.length + 1;
+  const buf = new Uint8Array(headLen + recLen * rows.length + 1), v = new DataView(buf.buffer), d = new Date();
+  buf[0] = 0x03; buf[1] = d.getFullYear() - 1900; buf[2] = d.getMonth() + 1; buf[3] = d.getDate();
+  v.setUint32(4, rows.length, true); v.setUint16(8, headLen, true); v.setUint16(10, recLen, true);
+  F.forEach(([name, type, len, dec], k) => { const o = 32 + k * 32; buf.set(enc.encode(name), o); buf[o + 11] = type.charCodeAt(0); buf[o + 16] = len; buf[o + 17] = dec; });
+  buf[headLen - 1] = 0x0d;
+  // Text fields hold at most `max` bytes; cut whole characters so UTF-8 stays valid.
+  const fit = (t, max) => { let b = enc.encode(t); while (b.length > max) { t = t.slice(0, -1); b = enc.encode(t); } return b; };
+  rows.forEach((r, i) => {
+    let o = headLen + i * recLen; buf[o++] = 0x20;
+    const vals = [r.no, r.judul, r.catatan.replace(/\s*\n\s*/g, ' / '), r.lat, r.lon, r.zona, r.utmX, r.utmY, r.akurasi, r.elevasi, r.waktu, r.sumber, r.foto];
+    F.forEach(([, type, len, dec], k) => {
+      const val = vals[k];
+      const bytes = type === 'N' ? enc.encode((val == null ? '' : Number(val).toFixed(dec)).padStart(len).slice(-len)) : fit(String(val ?? ''), len);
+      buf.fill(0x20, o, o + len); buf.set(bytes, o); o += len;
+    });
+  });
+  buf[buf.length - 1] = 0x1a;
+  return buf;
+}
+
+async function addPhotos(zip, pts) {
+  const dir = zip.folder('foto');
+  for (let i = 0; i < pts.length; i++) dir.file(photoName(i), await stamped(pts[i]));
+}
+const zipBlob = zip => zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+
+const EXPORTS = {
+  kmz: async (pts, name, base) => ({ file: base + '.kmz', blob: await buildKmz(pts, name), open: true }),
+  shp: async (pts, name, base, withPhotos) => {
+    const zip = new JSZip(), stem = base, sh = buildShapefile(exportRows(pts));
+    zip.file(stem + '.shp', sh.shp); zip.file(stem + '.shx', sh.shx); zip.file(stem + '.dbf', sh.dbf);
+    zip.file(stem + '.prj', WGS84_PRJ); zip.file(stem + '.cpg', 'UTF-8');
+    if (withPhotos) await addPhotos(zip, pts);
+    return { file: base + '-shapefile.zip', blob: await zipBlob(zip) };
+  },
+  geojson: async (pts, name, base, withPhotos) => {
+    const text = buildGeoJson(exportRows(pts), withPhotos);
+    if (!withPhotos) return { file: base + '.geojson', blob: new Blob([text], { type: 'application/geo+json' }) };
+    const zip = new JSZip(); zip.file(base + '.geojson', text); await addPhotos(zip, pts);
+    return { file: base + '-geojson.zip', blob: await zipBlob(zip) };
+  },
+  csv: async (pts, name, base, withPhotos) => {
+    const text = buildCsv(exportRows(pts));
+    if (!withPhotos) return { file: base + '.csv', blob: new Blob([text], { type: 'text/csv' }) };
+    const zip = new JSZip(); zip.file(base + '.csv', text); await addPhotos(zip, pts);
+    return { file: base + '-csv.zip', blob: await zipBlob(zip) };
+  },
+  gpx: async (pts, name, base) => ({ file: base + '.gpx', blob: new Blob([buildGpx(exportRows(pts), pts, name)], { type: 'application/gpx+xml' }) }),
+};
+
+// The claude.ai viewer saves only some extensions: same bytes under an accepted name, or wrapped in a zip.
+async function viewerSafe(out) {
+  if (!inArtifact()) return out;
+  if (out.file.endsWith('.kmz')) return { ...out, file: out.file.replace(/\.kmz$/, '.zip'), note: 'Ganti ekstensinya menjadi .kmz lalu buka di Google Earth.' };
+  if (out.file.endsWith('.geojson')) return { ...out, file: out.file.replace(/\.geojson$/, '.json') };
+  if (out.file.endsWith('.gpx')) { const z = new JSZip(); z.file(out.file, out.blob); return { ...out, file: out.file + '.zip', blob: await zipBlob(z) }; }
+  return out;
+}
+
+try { $('withPhotos').checked = localStorage.getItem('cl-withphotos') !== '0'; } catch {}
+$('withPhotos').addEventListener('change', e => { try { localStorage.setItem('cl-withphotos', e.target.checked ? '1' : '0'); } catch {} });
+$('exportBtn').addEventListener('click', () => {
+  const pts = exportPoints(); if (!pts.length) return;
+  const skipped = items.length - pts.length;
+  $('expSummary').textContent = `${pts.length} titik akan diekspor` + (skipped ? `. ${skipped} foto tanpa koordinat tidak ikut.` : '.');
+  $('exportSheet').hidden = false;
 });
+$('exportClose').addEventListener('click', () => { $('exportSheet').hidden = true; });
+document.querySelectorAll('.fmt').forEach(btn => btn.addEventListener('click', async () => {
+  const pts = exportPoints(); if (!pts.length) return;
+  if (!window.JSZip) { toast('Pustaka ekspor belum termuat. Periksa koneksi internet lalu coba lagi.'); return; }
+  const list = $('exportSheet').querySelector('.fmt-list'); list.classList.add('busy');
+  toast('Menyiapkan file…', 20000);
+  try {
+    const name = $('surveyName').value.trim() || 'Survey lapangan';
+    const base = `${slug(name)}-${new Date().toISOString().slice(0, 10)}`;
+    const out = await viewerSafe(await EXPORTS[btn.dataset.fmt](pts, name, base, $('withPhotos').checked));
+    $('toast').hidden = true;
+    const ok = await saveFile(out.file, out.blob, out.open);
+    if (ok && !native) toast(`Tersimpan: ${out.file}` + (out.note ? '. ' + out.note : ''), 6000);
+  } catch (e) { toast('Ekspor gagal: ' + (e?.message || e)); }
+  finally { list.classList.remove('busy'); }
+}));
 
 /* ---------- install as app (works only when served over https, not inside claude.ai) ---------- */
 let deferred = null;
@@ -643,7 +828,7 @@ try { if (!native && 'serviceWorker' in navigator && !inArtifact() && location.p
 if (onClaude) $('hint').textContent = 'Di halaman ini lokasi diambil dari data GPS di dalam foto. Nyalakan "Tag lokasi" di setelan aplikasi Kamera HP. Foto tanpa lokasi bisa diisi koordinatnya secara manual.';
 
 // Android back button: close the open photo first.
-window.__clBack = () => { if ($('sheet').hidden) return false; $('doneBtn').click(); return true; };
+window.__clBack = () => { if (!$('exportSheet').hidden) { $('exportSheet').hidden = true; return true; } if ($('sheet').hidden) return false; $('doneBtn').click(); return true; };
 
 getAll().then(all => {
   items = all.sort((a, b) => b.time - a.time); render();

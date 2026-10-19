@@ -82,6 +82,15 @@ label.f textarea{min-height:150px;resize:vertical}
 .note.err{color:var(--bad)}
 .confirm{border:1px solid var(--bad);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
 
+.exp{display:flex;flex-direction:column;gap:14px;padding-block:16px 40px;max-width:640px}
+.fmt-list{display:flex;flex-direction:column;gap:10px}
+.fmt{display:grid;grid-template-columns:1fr auto;gap:2px 12px;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;cursor:pointer}
+.fmt:hover{border-color:var(--accent)}
+.fmt-name{font-weight:600;font-size:16px}
+.fmt .ext{font-family:var(--f-mono);font-size:12px;color:var(--accent);align-self:center}
+.fmt small{grid-column:1 / -1;color:var(--muted);font-size:13px}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:14px}
+.check input{margin-top:3px;accent-color:var(--accent)}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:30;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:14px;max-width:calc(100% - 32px)}
 .busy{opacity:.6;pointer-events:none}
 #installBtn{padding:6px 12px;font-size:13px}

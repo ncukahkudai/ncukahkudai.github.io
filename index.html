@@ -44,7 +44,7 @@
   <div class="count" id="count"></div>
   <button class="btn primary" id="exportBtn">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>
-    Ekspor ke Google Earth
+    Ekspor
   </button>
 </div></div>
 
@@ -79,6 +79,30 @@
         <div class="row"><button class="btn" id="delNo">Batal</button><button class="btn primary" id="delYes">Ya, hapus</button></div>
       </div>
     </div>
+  </div>
+</div>
+
+<div id="exportSheet" class="sheet" hidden>
+  <div class="head"><div class="wrap">
+    <h2>Ekspor data</h2>
+    <button class="btn" id="exportClose">Tutup</button>
+  </div></div>
+  <div class="wrap exp">
+    <p class="note" id="expSummary"></p>
+    <div class="fmt-list">
+      <button class="fmt" data-fmt="kmz"><span class="fmt-name">Google Earth</span><span class="ext">.kmz</span>
+        <small>Foto, judul, dan catatan muncul saat kursor di atas titik. Untuk Google Earth Pro, web, dan HP.</small></button>
+      <button class="fmt" data-fmt="shp"><span class="fmt-name">Shapefile</span><span class="ext">.shp (.zip)</span>
+        <small>Untuk QGIS, ArcGIS, Global Mapper. Titik WGS 84 dengan atribut judul, catatan, UTM, akurasi.</small></button>
+      <button class="fmt" data-fmt="geojson"><span class="fmt-name">GeoJSON</span><span class="ext">.geojson</span>
+        <small>Untuk QGIS, peta web, dan geojson.io.</small></button>
+      <button class="fmt" data-fmt="csv"><span class="fmt-name">Tabel CSV / Excel</span><span class="ext">.csv</span>
+        <small>Daftar titik dengan lintang-bujur, koordinat UTM, waktu, dan catatan.</small></button>
+      <button class="fmt" data-fmt="gpx"><span class="fmt-name">GPX</span><span class="ext">.gpx</span>
+        <small>Titik (waypoint) untuk GPS Garmin, Avenza Maps, OsmAnd.</small></button>
+    </div>
+    <label class="check"><input type="checkbox" id="withPhotos" checked><span>Sertakan foto untuk Shapefile, GeoJSON, dan CSV (dikemas dalam .zip bersama folder <code>foto</code>)</span></label>
+    <p class="note">Koordinat memakai WGS 84 (EPSG:4326). Kolom UTM dihitung untuk zona masing-masing titik.</p>
   </div>
 </div>
 

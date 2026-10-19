@@ -1,4 +1,4 @@
-# Builds the Android app (unsigned) on GitHub's servers and commits it to apk/.
+# Builds the Android app (unsigned APK for direct install, AAB for Google Play) and commits both to apk/.
 # The owner signs it with their private key outside this repository.
 name: Build APK
 on:
@@ -15,11 +15,11 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "17" }
       - uses: gradle/actions/setup-gradle@v4
-        with: { gradle-version: "8.9" }
+        with: { gradle-version: "8.11.1" }
       - name: Build
         run: |
           set -o pipefail
-          gradle -p android-twa assembleRelease --no-daemon 2>&1 | tee build.log
+          gradle -p android-twa assembleRelease bundleRelease --no-daemon 2>&1 | tee build.log
       - name: Commit APK (or the log when the build fails)
         if: always()
         run: |
@@ -28,6 +28,7 @@ jobs:
           mkdir -p apk
           cp build.log apk/build.log || true
           cp android-twa/app/build/outputs/apk/release/app-release-unsigned.apk apk/CatatanLapangan-unsigned.apk || true
+          cp android-twa/app/build/outputs/bundle/release/app-release.aab apk/CatatanLapangan-unsigned.aab || true
           git add -f apk/
           git commit -m "Hasil build APK (${{ job.status }}) [skip ci]" || exit 0
           git push

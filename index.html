@@ -2,7 +2,7 @@
 <html lang="id"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://server.arcgisonline.com; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#d9531a">
 <link rel="manifest" href="manifest.webmanifest">
@@ -40,6 +40,7 @@
       Galeri
     </label>
   </section>
+  <label class="check auto-save" id="autoSaveRow"><input type="checkbox" id="autoSave" checked><span>Simpan otomatis ke galeri HP saat menekan <b>Selesai</b> (foto dengan koordinat, tinggi, dan tanggal)</span></label>
   <p class="hint" id="hint">Lokasi diambil dari GPS perangkat saat memotret, atau dari data lokasi di dalam foto. Ketuk foto untuk menulis catatan.</p>
   <section id="grid" class="grid" aria-live="polite"></section>
 </main>
@@ -67,7 +68,8 @@
       <label class="f">Koordinat (lintang, bujur)<input id="fCoord" inputmode="text" placeholder="-6.917464, 107.619123"></label>
       <div class="note" id="coordNote"></div>
       <div class="row">
-        <button class="btn" id="useGps">Kunci GPS di titik ini (15 dtk)</button>
+        <button class="btn" id="useGps">Kunci presisi GPS (30 dtk)</button>
+        <button class="btn" id="mapBtn">Atur tepat di peta satelit</button>
         <button class="btn" id="copyCoord">Salin koordinat</button>
       </div>
       <div class="row">
@@ -75,7 +77,7 @@
         <a class="btn" id="lnkMaps" target="_blank" rel="noopener">Google Maps</a>
       </div>
       <div class="row">
-        <button class="btn" id="saveJpg">Simpan foto + koordinat</button>
+        <button class="btn" id="saveJpg">Simpan ke galeri</button>
         <button class="btn danger" id="delBtn">Hapus</button>
       </div>
       <div class="confirm" id="delConfirm" hidden>
@@ -114,6 +116,19 @@
   <h2>Data sudah tersimpan</h2>
   <p>Semua foto dan catatan aman di HP ini. Tekan tombol <b>Beranda</b> atau <b>Kembali</b> di HP untuk keluar.</p>
   <button class="btn primary" id="exitStay">Lanjut bekerja</button>
+</div>
+
+<div id="mapSheet" class="sheet map-sheet" hidden>
+  <div class="head"><div class="wrap">
+    <h2>Atur titik</h2>
+    <button class="btn" id="mapCancel">Batal</button>
+  </div></div>
+  <div class="map-wrap"><div id="map"></div><div class="crosshair" aria-hidden="true"></div></div>
+  <div class="map-bar"><div class="wrap">
+    <p class="note">Geser peta sampai tanda bidik tepat di atas objek. Titik oranye = posisi sekarang, biru = GPS Anda.</p>
+    <div class="map-read" id="mapRead"></div>
+    <div class="row"><button class="btn" id="mapGps">Ke posisi GPS saya</button><button class="btn primary" id="mapUse">Pakai titik ini</button></div>
+  </div></div>
 </div>
 
 <div id="toast" class="toast" hidden></div>

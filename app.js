@@ -10,7 +10,9 @@ const $ = id => document.getElementById(id);
 const pad = (n, l = 2) => String(n).padStart(l, '0');
 const fmtTime = t => { const d = new Date(t); return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const fmtCoord = it => it.lat == null ? 'Tanpa koordinat' : `${it.lat.toFixed(6)}, ${it.lon.toFixed(6)}`;
-const SRC = { gps: 'GPS', exif: 'Data foto', manual: 'Manual' };
+const SRC = { gps: 'GPS', exif: 'Data foto', manual: 'Manual', map: 'Peta satelit' };
+const fmtDate = t => { const d = new Date(t); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`; };
+const fmtAlt = it => it.alt != null ? `${Math.round(it.alt)} m` : '–';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
 let toastT;
@@ -48,25 +50,37 @@ if ('geolocation' in navigator) {
       fix = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, alt: p.coords.altitude, time: Date.now() };
       if (!gpsListeners.size) showFix();
       gpsListeners.forEach(f => f(fix));
+      drawGps();
     }, () => onClaude ? setGps('warn', 'Lokasi dari foto') : setGps('off', 'GPS tidak aktif'), { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
   } catch { setGps('off', 'GPS tidak aktif'); }
 } else setGps('off', 'GPS tidak ada');
 
-// Averages readings, weighting each by 1/accuracy² and ignoring ones much worse than the best.
+// Distance in metres between two nearby positions.
+function metres(a, b) {
+  const dy = (a.lat - b.lat) * 110574, dx = (a.lon - b.lon) * 111320 * Math.cos(b.lat * Math.PI / 180);
+  return Math.hypot(dx, dy);
+}
+// Averages readings weighted by 1/accuracy², drops readings much worse than the best one,
+// then drops jumps far from the cluster (reflections off walls and water). `spread` is the
+// RMS distance of the kept readings from the result, in metres.
 function averageFix(list) {
   if (!list.length) return null;
+  const mean = arr => { let w = 0, lat = 0, lon = 0; for (const f of arr) { const k = 1 / (f.acc * f.acc); w += k; lat += f.lat * k; lon += f.lon * k; } return { lat: lat / w, lon: lon / w }; };
   const best = Math.min(...list.map(f => f.acc));
-  const use = list.filter(f => f.acc <= Math.max(best * 1.5, best + 3));
-  let w = 0, lat = 0, lon = 0, alt = 0, altW = 0;
-  for (const f of use) {
-    const k = 1 / (f.acc * f.acc); w += k; lat += f.lat * k; lon += f.lon * k;
-    if (f.alt != null) { alt += f.alt * k; altW += k; }
+  let use = list.filter(f => f.acc <= Math.max(best * 1.5, best + 3)), m = mean(use);
+  if (use.length >= 5) {
+    const d = use.map(f => metres(f, m)), med = [...d].sort((a, b) => a - b)[d.length >> 1];
+    const keep = use.filter((f, i) => d[i] <= Math.max(2.5 * med, 1));
+    if (keep.length >= 3) { use = keep; m = mean(use); }
   }
-  return { lat: lat / w, lon: lon / w, acc: best, alt: altW ? alt / altW : null, n: use.length, time: Date.now() };
+  const spread = Math.sqrt(use.reduce((t, f) => t + metres(f, m) ** 2, 0) / use.length);
+  const withAlt = use.filter(f => f.alt != null);
+  const alt = withAlt.length ? withAlt.reduce((t, f) => t + f.alt, 0) / withAlt.length : null;
+  return { lat: m.lat, lon: m.lon, acc: best, spread, alt, n: use.length, time: Date.now() };
 }
 // Collects only readings that arrive from now on (never a stored old position).
-// Stops after `ms`, or earlier once a reading reaches `goodAcc` metres, unless `full` is set.
-function lockGps(ms, { goodAcc = 5, full = false, onProgress } = {}) {
+// Stops after `ms`, earlier once a reading reaches `goodAcc` metres (unless `full`), or when ctl.stop() is called.
+function lockGps(ms, { goodAcc = 5, full = false, onProgress, ctl } = {}) {
   return new Promise(resolve => {
     const got = [];
     const finish = () => { gpsListeners.delete(on); clearTimeout(timer); showFix(); resolve(averageFix(got)); };
@@ -76,6 +90,7 @@ function lockGps(ms, { goodAcc = 5, full = false, onProgress } = {}) {
     };
     gpsListeners.add(on);
     const timer = setTimeout(finish, ms);
+    if (ctl) ctl.stop = finish;
   });
 }
 
@@ -164,7 +179,9 @@ async function stamped(it) {
     const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
     const g = c.getContext('2d'); g.drawImage(img, 0, 0);
     const fs = Math.max(11, Math.round(Math.min(c.width, c.height) * 0.02));
-    const lines = [fmtCoord(it) + (it.acc ? `  ±${Math.round(it.acc)} m` : ''), fmtTime(it.time) + (it.title ? '  ·  ' + it.title : '')];
+    const lines = [fmtCoord(it) + (it.acc ? `  ±${Math.round(it.acc)} m` : ''),
+      `Tinggi ${fmtAlt(it)}  ·  Tgl survey ${fmtDate(it.time)} ${new Date(it.time).toTimeString().slice(0, 5)}`];
+    if (it.title) lines.push(it.title);
     g.font = `500 ${fs}px "JetBrains Mono", ui-monospace, Menlo, monospace`;
     const padX = fs * 0.6, lh = fs * 1.3, m = fs * 0.7;
     const w = Math.min(c.width - m * 2, Math.max(...lines.map(l => g.measureText(l).width)) + padX * 2);
@@ -173,8 +190,51 @@ async function stamped(it) {
     g.beginPath(); g.roundRect ? g.roundRect(m, c.height - m - h, w, h, fs * 0.3) : g.rect(m, c.height - m - h, w, h); g.fill();
     g.fillStyle = '#fff'; g.textBaseline = 'top';
     lines.forEach((l, i) => g.fillText(l, m + padX, c.height - m - h + padX * 0.4 + i * lh + (lh - fs) / 2, w - padX * 2));
-    return await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+    return withExif(await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9)), it);
   } finally { URL.revokeObjectURL(url); }
+}
+
+// Writes the GPS position, altitude, accuracy and date into the JPEG as EXIF, so gallery apps,
+// Google Photos and GIS tools read the location from the file itself.
+async function withExif(blob, it) {
+  const asc = t => [...Array.from(t, c => c.charCodeAt(0) & 0x7f), 0];
+  const d = new Date(it.time);
+  const ts = `${d.getFullYear()}:${pad(d.getMonth() + 1)}:${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const dms = v => { v = Math.abs(v); const deg = Math.floor(v), mf = (v - deg) * 60, min = Math.floor(mf); return [[deg, 1], [min, 1], [Math.round((mf - min) * 600000), 10000]]; };
+  const ifd0 = [[0x0132, 2, asc(ts)], [0x8769, 4, 'exif']];
+  const exif = [[0x9003, 2, asc(ts)], [0x9004, 2, asc(ts)]];
+  let gps = null;
+  if (it.lat != null) {
+    gps = [[0x0000, 1, [2, 3, 0, 0]], [0x0001, 2, asc(it.lat < 0 ? 'S' : 'N')], [0x0002, 5, dms(it.lat)],
+      [0x0003, 2, asc(it.lon < 0 ? 'W' : 'E')], [0x0004, 5, dms(it.lon)], [0x0012, 2, asc('WGS-84')]];
+    if (it.alt != null) gps.push([0x0005, 1, [it.alt < 0 ? 1 : 0]], [0x0006, 5, [[Math.round(Math.abs(it.alt) * 100), 100]]]);
+    if (it.acc) gps.push([0x001f, 5, [[Math.round(it.acc * 100), 100]]]);
+    ifd0.push([0x8825, 4, 'gps']);
+  }
+  const size = ([, type, val]) => type === 5 ? val.length * 8 : type === 4 ? 4 : val.length;
+  const ifdLen = E => 2 + 12 * E.length + 4 + E.reduce((t, e) => t + (size(e) > 4 ? size(e) + (size(e) & 1) : 0), 0);
+  const off = { exif: 8 + ifdLen(ifd0) }; off.gps = off.exif + ifdLen(exif);
+  const total = off.gps + (gps ? ifdLen(gps) : 0), v = new DataView(new ArrayBuffer(total));
+  v.setUint16(0, 0x4d4d); v.setUint16(2, 42); v.setUint32(4, 8);   // big-endian TIFF header
+  const write = (E, at) => {
+    E.sort((a, b) => a[0] - b[0]);
+    v.setUint16(at, E.length);
+    let data = at + 2 + 12 * E.length + 4;
+    E.forEach(([tag, type, val], k) => {
+      const e = at + 2 + k * 12, n = size([tag, type, val]);
+      v.setUint16(e, tag); v.setUint16(e + 2, type); v.setUint32(e + 4, type === 4 ? 1 : val.length);
+      if (type === 4) { v.setUint32(e + 8, off[val]); return; }
+      let p = e + 8;
+      if (n > 4) { p = data; v.setUint32(e + 8, data); data += n + (n & 1); }
+      if (type === 5) val.forEach(([a, b]) => { v.setUint32(p, a); v.setUint32(p + 4, b); p += 8; });
+      else val.forEach(b => v.setUint8(p++, b));
+    });
+    v.setUint32(at + 2 + 12 * E.length, 0);
+  };
+  write(ifd0, 8); write(exif, off.exif); if (gps) write(gps, off.gps);
+  const app1 = new Uint8Array([0xff, 0xe1, (total + 8) >> 8, (total + 8) & 0xff, 0x45, 0x78, 0x69, 0x66, 0, 0]);
+  const buf = await blob.arrayBuffer();
+  return new Blob([new Uint8Array(buf, 0, 2), app1, new Uint8Array(v.buffer), new Uint8Array(buf, 2)], { type: 'image/jpeg' });
 }
 
 /* ---------- files out ---------- */
@@ -270,7 +330,8 @@ async function addFiles(files, fromCamera) {
         if (!live && Date.now() - fix.time < 20000) live = fix;
         $('toast').hidden = true;
       }
-      if (live) Object.assign(it, { lat: live.lat, lon: live.lon, acc: live.acc, alt: live.alt, n: live.n || 1, src: 'gps' });
+      if (live) Object.assign(it, { lat: live.lat, lon: live.lon, acc: live.acc, spread: live.spread ?? null, alt: live.alt, n: live.n || 1, src: 'gps' });
+      if (fromCamera) it.toGallery = true;
       else if (ex.lat != null) Object.assign(it, { lat: ex.lat, lon: ex.lon, alt: ex.alt ?? null, src: 'exif' });
       if (fromCamera) it.time = Date.now();
       if (it.lat == null) noLoc++;
@@ -288,14 +349,14 @@ $('galIn').addEventListener('change', e => { addFiles([...e.target.files], false
 /* ---------- editor ---------- */
 let cur = null, saveT;
 function syncSheet() {
-  $('sStamp').textContent = fmtCoord(cur) + (cur.acc ? `  ±${Math.round(cur.acc)} m` : '') + '  ·  ' + fmtTime(cur.time);
+  $('sStamp').textContent = fmtCoord(cur) + (cur.acc ? `  ±${Math.round(cur.acc)} m` : '') + `  ·  tinggi ${fmtAlt(cur)}  ·  ${fmtTime(cur.time)}`;
   $('sStamp').classList.toggle('none', cur.lat == null);
   const has = cur.lat != null;
   for (const [id, fn] of [['lnkEarth', earthUrl], ['lnkMaps', mapsUrl]]) {
     const a = $(id); if (has) a.href = fn(cur); else a.removeAttribute('href'); a.classList.toggle('busy', !has);
   }
   $('coordNote').className = 'note';
-  $('coordNote').textContent = has ? `Sumber: ${SRC[cur.src] || '-'}${cur.acc ? ` · akurasi ±${Math.round(cur.acc)} m` : ''}${cur.n > 1 ? ` · rata-rata ${cur.n} bacaan` : ''}${cur.alt != null ? ` · elevasi ${Math.round(cur.alt)} m` : ''}` : 'Foto ini belum punya lokasi. Isi koordinat (bisa ditempel dari Google Earth/Maps) atau tekan "Kunci GPS di titik ini".';
+  $('coordNote').textContent = has ? `Sumber: ${SRC[cur.src] || '-'}${cur.acc ? ` · akurasi ±${Math.round(cur.acc)} m` : ''}${cur.n > 1 ? ` · rata-rata ${cur.n} bacaan` : ''}${cur.spread != null && cur.n > 1 ? `, sebaran ${cur.spread.toFixed(1)} m` : ''} · tinggi ${fmtAlt(cur)}` : 'Foto ini belum punya lokasi. Isi koordinat (bisa ditempel dari Google Earth/Maps) atau tekan "Kunci presisi GPS".';
 }
 function openSheet(id) {
   cur = items.find(i => i.id === id); if (!cur) return;
@@ -316,27 +377,40 @@ $('fCoord').addEventListener('change', e => {
   Object.assign(cur, { lat: p.lat, lon: p.lon, acc: null, alt: null, n: 0, src: 'manual' });
   e.target.value = fmtCoord(cur); syncSheet(); queueSave();
 });
+let lockCtl = null;
 $('useGps').addEventListener('click', async () => {
+  if (lockCtl) { lockCtl.stop?.(); return; }
   if (!fix) { toast('GPS belum mendapat posisi. Pastikan izin lokasi aktif dan tunggu sebentar.'); return; }
   const btn = $('useGps'), label = btn.textContent, target = cur;
-  btn.classList.add('busy');
-  toast('Berdiri diam tepat di titik foto. GPS dirata-rata selama 15 detik.', 4000);
-  const a = await lockGps(15000, { full: true, onProgress: (n, avg) => { btn.textContent = `Merata-rata… ${n} bacaan ±${Math.round(avg.acc)} m`; } });
-  btn.textContent = label; btn.classList.remove('busy');
-  if (!a) { toast('Tidak ada bacaan GPS baru. Coba di tempat terbuka.'); return; }
-  Object.assign(target, { lat: a.lat, lon: a.lon, acc: a.acc, alt: a.alt, n: a.n, src: 'gps' });
+  lockCtl = {};
+  toast('Berdiri diam tepat di atas titik, HP mendatar menghadap langit. Ketuk tombol lagi untuk berhenti lebih awal.', 5000);
+  const a = await lockGps(30000, { full: true, ctl: lockCtl, onProgress: (n, avg) => {
+    btn.textContent = `Berhenti & pakai · ${n} bacaan ±${Math.round(avg.acc)} m, sebaran ${avg.spread.toFixed(1)} m`; } });
+  lockCtl = null; btn.textContent = label;
+  if (!a) { toast('Tidak ada bacaan GPS baru. Coba di tempat yang lebih terbuka.'); return; }
+  Object.assign(target, { lat: a.lat, lon: a.lon, acc: a.acc, spread: a.spread, alt: a.alt, n: a.n, src: 'gps' });
   if (cur === target) { $('fCoord').value = fmtCoord(cur); syncSheet(); }
-  put(target); toast(`Lokasi dikunci dari ${a.n} bacaan GPS (±${Math.round(a.acc)} m).`);
+  put(target); toast(`Lokasi dikunci dari ${a.n} bacaan GPS (±${Math.round(a.acc)} m, sebaran ${a.spread.toFixed(1)} m).`, 5000);
 });
 $('copyCoord').addEventListener('click', async () => {
   if (cur.lat == null) return;
   try { await navigator.clipboard.writeText(fmtCoord(cur)); toast('Koordinat disalin.'); }
   catch { $('fCoord').focus(); $('fCoord').select(); toast('Tekan salin pada teks yang terpilih.'); }
 });
-$('saveJpg').addEventListener('click', async () => {
-  const b = await stamped(cur);
-  await saveFile(`${slug(cur.title || $('surveyName').value)}-${new Date(cur.time).toISOString().slice(0, 10)}.jpg`, b);
-});
+// Chrome on Android saves downloads to the Download folder, which gallery apps and Google Photos show as an album.
+const galleryName = it => { const d = new Date(it.time);
+  return `CatatanLapangan_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${it.title ? '_' + slug(it.title) : ''}.jpg`; };
+async function saveToGallery(it, quiet) {
+  const ok = await saveFile(galleryName(it), await stamped(it));
+  if (ok) { it.toGallery = false; put(it); if (!quiet && !native) toast('Foto tersimpan ke galeri HP (album Download).'); }
+  return ok;
+}
+let autoSave = true;
+try { autoSave = localStorage.getItem('cl-autosave') !== '0'; } catch {}
+$('autoSave').checked = autoSave;
+$('autoSave').addEventListener('change', e => { autoSave = e.target.checked; try { localStorage.setItem('cl-autosave', autoSave ? '1' : '0'); } catch {} });
+$('autoSaveRow').hidden = onClaude;
+$('saveJpg').addEventListener('click', () => saveToGallery(cur));
 $('delBtn').addEventListener('click', () => { $('delConfirm').hidden = false; });
 $('delNo').addEventListener('click', () => { $('delConfirm').hidden = true; });
 $('delYes').addEventListener('click', async () => {
@@ -346,7 +420,61 @@ $('delYes').addEventListener('click', async () => {
 });
 $('doneBtn').addEventListener('click', async () => {
   clearTimeout(saveT); if (cur) await put(cur);
+  if (cur?.toGallery && autoSave && !onClaude) await saveToGallery(cur);
   cur = null; $('sheet').hidden = true; render();
+});
+
+/* ---------- fine-tune a point on satellite imagery ---------- */
+// Leaflet is part of the app; only the imagery tiles come from Esri (needs internet).
+const TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+let leafletP = null, map = null, mapTarget = null;
+const mapLayers = {};
+function loadLeaflet() {
+  if (window.L) return Promise.resolve();
+  return leafletP ??= new Promise((ok, no) => {
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'leaflet.css'; document.head.appendChild(css);
+    const js = document.createElement('script'); js.src = 'leaflet.js';
+    js.onload = ok; js.onerror = () => { leafletP = null; no(new Error('peta tidak termuat')); };
+    document.head.appendChild(js);
+  });
+}
+function drawGps() {
+  if (!map || !fix || $('mapSheet').hidden) return;
+  const ll = [fix.lat, fix.lon];
+  if (!mapLayers.gps) {
+    mapLayers.acc = L.circle(ll, { radius: fix.acc, color: '#2b7de9', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
+    mapLayers.gps = L.circleMarker(ll, { radius: 6, color: '#fff', weight: 2, fillColor: '#2b7de9', fillOpacity: 1, interactive: false }).addTo(map);
+  } else { mapLayers.gps.setLatLng(ll); mapLayers.acc.setLatLng(ll).setRadius(fix.acc); }
+}
+function showMapCenter() { const c = map.getCenter(); $('mapRead').textContent = `${c.lat.toFixed(7)}, ${c.lng.toFixed(7)}  ·  zoom ${map.getZoom()}`; }
+$('mapBtn').hidden = onClaude;
+$('mapBtn').addEventListener('click', async () => {
+  try { await loadLeaflet(); } catch { toast('Peta belum bisa dimuat. Periksa koneksi internet.'); return; }
+  mapTarget = cur;
+  $('mapSheet').hidden = false;
+  const has = cur.lat != null, start = has ? [cur.lat, cur.lon] : fix ? [fix.lat, fix.lon] : [-2.5, 118];
+  if (!map) {
+    map = L.map('map', { maxZoom: 22, zoomSnap: 0.5 });
+    L.tileLayer(TILES, { maxZoom: 22, maxNativeZoom: 19, attribution: 'Citra © Esri, Maxar, Earthstar Geographics' }).addTo(map);
+    map.on('move', showMapCenter);
+  }
+  map.invalidateSize();
+  map.setView(start, has || fix ? 20 : 5, { animate: false });
+  mapLayers.orig?.remove();
+  mapLayers.orig = has ? L.circleMarker(start, { radius: 6, color: '#fff', weight: 2, fillColor: '#d9531a', fillOpacity: 1, interactive: false }).addTo(map) : null;
+  drawGps(); showMapCenter();
+});
+$('mapCancel').addEventListener('click', () => { $('mapSheet').hidden = true; });
+$('mapGps').addEventListener('click', () => {
+  if (!fix) { toast('GPS belum mendapat posisi.'); return; }
+  map.setView([fix.lat, fix.lon], Math.max(map.getZoom(), 19));
+});
+$('mapUse').addEventListener('click', () => {
+  const c = map.getCenter(), t = mapTarget;
+  Object.assign(t, { lat: c.lat, lon: c.lng, acc: null, spread: null, n: 0, src: 'map' });
+  put(t); $('mapSheet').hidden = true;
+  if (cur === t) { $('fCoord').value = fmtCoord(t); syncSheet(); }
+  toast('Titik disesuaikan di peta satelit.');
 });
 
 /* ---------- KMZ export ---------- */
@@ -639,14 +767,14 @@ if (onClaude) $('hint').textContent = 'Di halaman ini lokasi diambil dari data G
 $('exitBtn').hidden = onClaude;
 $('exitBtn').addEventListener('click', async () => {
   clearTimeout(saveT);
-  try { if (cur) await put(cur); } catch {}
+  try { if (cur) await put(cur); if (cur?.toGallery && autoSave && !onClaude) await saveToGallery(cur, true); } catch {}
   if (native?.exit) { native.exit(); return; }
   try { window.close(); } catch {}
   setTimeout(() => { if (!document.hidden) $('exitDone').hidden = false; }, 400);
 });
 $('exitStay').addEventListener('click', () => { $('exitDone').hidden = true; });
 
-window.__clBack = () => { if (!$('exitDone').hidden) { $('exitDone').hidden = true; return true; } if (!$('exportSheet').hidden) { $('exportSheet').hidden = true; return true; } if ($('sheet').hidden) return false; $('doneBtn').click(); return true; };
+window.__clBack = () => { if (!$('mapSheet').hidden) { $('mapSheet').hidden = true; return true; } if (!$('exitDone').hidden) { $('exitDone').hidden = true; return true; } if (!$('exportSheet').hidden) { $('exportSheet').hidden = true; return true; } if ($('sheet').hidden) return false; $('doneBtn').click(); return true; };
 
 getAll().then(all => {
   items = all.sort((a, b) => b.time - a.time); render();

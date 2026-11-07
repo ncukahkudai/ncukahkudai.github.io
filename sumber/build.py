@@ -16,7 +16,8 @@ js = re.search(r"<script>\n(.*?)</script>", src, re.S).group(1)
 body = src[src.index("</style>") + len("</style>"):src.index("<script>\n")]
 
 # Without Google Fonts the app uses the phone's own fonts (the CSS already lists fallbacks).
-CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; "
+# Map imagery tiles are the only outside resource: images from Esri's World Imagery server, never code.
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://server.arcgisonline.com; "
        "connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; "
        "form-action 'none'; object-src 'none'")
 
@@ -47,7 +48,8 @@ base_css = (":root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(s
 (out / "index.html").write_text(html)
 (out / "app.css").write_text(base_css + css)
 (out / "app.js").write_text(js)
-(out / "jszip.min.js").write_bytes((root / "vendor/jszip.min.js").read_bytes())
+for f in ["jszip.min.js", "leaflet.js", "leaflet.css"]:
+    (out / f).write_bytes((root / "vendor" / f).read_bytes())
 (out / "_headers").write_text(f"""/*
   Content-Security-Policy: {CSP}; frame-ancestors 'none'
   X-Frame-Options: DENY
@@ -62,7 +64,7 @@ base_css = (":root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(s
   Cache-Control: no-cache
 """)
 
-files = ["index.html", "app.css", "app.js", "jszip.min.js", "sw.js", "manifest.webmanifest", "_headers",
+files = ["index.html", "app.css", "app.js", "jszip.min.js", "leaflet.js", "leaflet.css", "sw.js", "manifest.webmanifest", "_headers",
          "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"]
 with zipfile.ZipFile(root / "catatan-lapangan.zip", "w", zipfile.ZIP_DEFLATED) as z:
     for f in files:

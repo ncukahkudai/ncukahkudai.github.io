@@ -85,6 +85,9 @@ label.f textarea{min-height:150px;resize:vertical}
 .row .btn{flex:1 1 auto}
 .note{font-size:12.5px;color:var(--muted)}
 .note.err{color:var(--bad)}
+.calib{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.calib-form{display:flex;flex-direction:column;gap:10px;width:100%;border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--surface)}
+.calib-form .note{margin:0}
 .confirm{border:1px solid var(--bad);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
 
 .auto-save{margin:-4px 0 12px}
@@ -181,6 +184,14 @@ label.f textarea{min-height:150px;resize:vertical}
       <label class="f">Catatan<textarea id="fNote" placeholder="Kondisi, ukuran, temuan, tindak lanjut…"></textarea></label>
       <label class="f">Koordinat (lintang, bujur)<input id="fCoord" inputmode="text" placeholder="-6.917464, 107.619123"></label>
       <div class="note" id="coordNote"></div>
+      <div class="calib">
+        <button class="linkish" id="calibOpen">Kalibrasi tinggi dengan GPS/patok acuan</button>
+        <div class="calib-form" id="calibForm" hidden>
+          <label class="f">Tinggi sebenarnya di titik foto ini (mdpl)<input id="calibRef" inputmode="decimal" placeholder="mis. 641"></label>
+          <p class="note">Isi dari GPS Garmin atau patok BM di titik yang sama. Selisihnya dipakai untuk semua foto dengan tinggi dari GPS HP ini.</p>
+          <div class="row"><button class="btn primary" id="calibSave">Simpan kalibrasi</button><button class="btn" id="calibClear">Hapus kalibrasi</button><button class="btn" id="calibClose">Tutup</button></div>
+        </div>
+      </div>
       <div class="row">
         <button class="btn" id="useGps">Kunci presisi GPS (30 dtk)</button>
         <button class="btn" id="mapBtn">Atur tepat di peta satelit</button>
@@ -288,11 +299,19 @@ function geoidHeight(lat, lon) {
   const top = get(r0, c0) + (get(r0, c0 + 1) - get(r0, c0)) * fx, bottom = get(r0 + 1, c0) + (get(r0 + 1, c0 + 1) - get(r0 + 1, c0)) * fx;
   return top + (bottom - top) * fy;
 }
-function mslAlt(it) {
+// Some phones already report height above sea level, others are biased; a calibration against a known height
+// (Garmin, benchmark) stores one offset for this phone, applied to every height that came from its GPS.
+let altCal = null;   // { offset, ref, at }
+try { altCal = JSON.parse(localStorage.getItem('cl-altcal') || 'null'); } catch {}
+function rawMsl(it) {
   if (it.alt == null) return null;
   if (it.altMsl) return it.alt;
   const n = it.lat != null ? geoidHeight(it.lat, it.lon) : null;
   return n == null ? null : it.alt - n;
+}
+function mslAlt(it) {
+  const h = rawMsl(it);
+  return h == null || it.altMsl || !altCal ? h : h + altCal.offset;
 }
 const fmtAlt = it => { const h = mslAlt(it); return h != null ? `${Math.round(h)} mdpl` : '– mdpl'; };
 // Shown in the photo details so the reading can be checked against a GPS receiver.
@@ -300,7 +319,8 @@ function altDetail(it) {
   if (it.alt == null) return '';
   if (it.altMsl) return ` (dari data foto)`;
   const n = it.lat != null ? geoidHeight(it.lat, it.lon) : null;
-  return ` (GPS mentah ${Math.round(it.alt)} m, koreksi geoid ${n == null ? '?' : (n >= 0 ? '−' : '+') + Math.abs(n).toFixed(1)} m)`;
+  const cal = altCal ? `, kalibrasi ${altCal.offset >= 0 ? '+' : '−'}${Math.abs(altCal.offset).toFixed(1)} m` : '';
+  return ` (GPS mentah ${Math.round(it.alt)} m, koreksi geoid ${n == null ? '?' : (n >= 0 ? '−' : '+') + Math.abs(n).toFixed(1)} m${cal})`;
 }
 loadGeoid().then(() => { if (cur) syncSheet(); });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -652,6 +672,7 @@ function syncSheet() {
 }
 function openSheet(id) {
   cur = items.find(i => i.id === id); if (!cur) return;
+  $('calibForm').hidden = true;
   $('sImg').src = thumb(cur);
   $('fTitle').value = cur.title; $('fNote').value = cur.note;
   $('fCoord').value = cur.lat != null ? fmtCoord(cur) : '';
@@ -683,6 +704,27 @@ $('useGps').addEventListener('click', async () => {
   Object.assign(target, { lat: a.lat, lon: a.lon, acc: a.acc, spread: a.spread, alt: a.alt, altMsl: false, n: a.n, src: 'gps' });
   if (cur === target) { $('fCoord').value = fmtCoord(cur); syncSheet(); }
   put(target); toast(`Lokasi dikunci dari ${a.n} bacaan GPS (±${Math.round(a.acc)} m, sebaran ${a.spread.toFixed(1)} m).`, 5000);
+});
+$('calibOpen').addEventListener('click', () => {
+  $('calibForm').hidden = false;
+  $('calibRef').value = ''; $('calibRef').focus();
+  $('calibClear').hidden = !altCal;
+});
+$('calibClose').addEventListener('click', () => { $('calibForm').hidden = true; });
+$('calibSave').addEventListener('click', () => {
+  const ref = parseFloat($('calibRef').value.replace(',', '.'));
+  if (!isFinite(ref)) { toast('Isi tinggi acuan dalam meter, mis. 641.'); return; }
+  if (cur.alt == null || cur.altMsl) { toast('Foto ini tidak punya tinggi dari GPS HP. Kalibrasi dari foto yang diambil dengan Ambil Foto.'); return; }
+  const base = rawMsl(cur);
+  if (base == null) { toast('Data geoid belum termuat. Coba lagi sebentar.'); return; }
+  altCal = { offset: ref - base, ref, at: Date.now() };
+  try { localStorage.setItem('cl-altcal', JSON.stringify(altCal)); } catch {}
+  $('calibForm').hidden = true; syncSheet(); render();
+  toast(`Kalibrasi tersimpan: ${altCal.offset >= 0 ? '+' : '−'}${Math.abs(altCal.offset).toFixed(1)} m untuk semua tinggi dari GPS HP ini.`, 6000);
+});
+$('calibClear').addEventListener('click', () => {
+  altCal = null; try { localStorage.removeItem('cl-altcal'); } catch {}
+  $('calibForm').hidden = true; syncSheet(); render(); toast('Kalibrasi tinggi dihapus.');
 });
 $('copyCoord').addEventListener('click', async () => {
   if (cur.lat == null) return;

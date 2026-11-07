@@ -67,6 +67,14 @@
       <label class="f">Catatan<textarea id="fNote" placeholder="Kondisi, ukuran, temuan, tindak lanjut…"></textarea></label>
       <label class="f">Koordinat (lintang, bujur)<input id="fCoord" inputmode="text" placeholder="-6.917464, 107.619123"></label>
       <div class="note" id="coordNote"></div>
+      <div class="calib">
+        <button class="linkish" id="calibOpen">Kalibrasi tinggi dengan GPS/patok acuan</button>
+        <div class="calib-form" id="calibForm" hidden>
+          <label class="f">Tinggi sebenarnya di titik foto ini (mdpl)<input id="calibRef" inputmode="decimal" placeholder="mis. 641"></label>
+          <p class="note">Isi dari GPS Garmin atau patok BM di titik yang sama. Selisihnya dipakai untuk semua foto dengan tinggi dari GPS HP ini.</p>
+          <div class="row"><button class="btn primary" id="calibSave">Simpan kalibrasi</button><button class="btn" id="calibClear">Hapus kalibrasi</button><button class="btn" id="calibClose">Tutup</button></div>
+        </div>
+      </div>
       <div class="row">
         <button class="btn" id="useGps">Kunci presisi GPS (30 dtk)</button>
         <button class="btn" id="mapBtn">Atur tepat di peta satelit</button>

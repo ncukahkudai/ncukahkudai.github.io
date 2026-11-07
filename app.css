@@ -35,7 +35,7 @@ button,input,textarea{font:inherit;color:inherit}
 .pick{position:relative;overflow:hidden}
 .pick input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:200px;z-index:1}
 .pick:focus-within{outline:2px solid var(--accent);outline-offset:2px}
-.err{background:var(--bad);color:#fff;font-size:13px;padding:8px 12px;border-radius:6px;margin-bottom:10px;word-break:break-word}
+.err-banner{background:var(--bad);color:#fff;font-size:13px;padding:8px 12px;border-radius:6px;margin-bottom:10px;word-break:break-word}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);padding:10px 14px;cursor:pointer;font-weight:600;text-decoration:none;color:var(--ink)}
 .btn:hover{border-color:var(--muted)}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -93,6 +93,9 @@ label.f textarea{min-height:150px;resize:vertical}
 .map-bar{background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 .map-bar .wrap{display:flex;flex-direction:column;gap:8px;padding-block:10px}
 .map-bar .note{margin:0}
+.gm-key{display:flex;flex-direction:column;gap:12px;padding-block:16px;max-width:640px}
+.gm-key p{margin:0}
+.map-host{position:absolute;inset:0}
 .map-read{font-family:var(--f-mono);font-size:13px;font-variant-numeric:tabular-nums}
 .exp{display:flex;flex-direction:column;gap:14px;padding-block:16px 40px;max-width:640px}
 .fmt-list{display:flex;flex-direction:column;gap:10px}

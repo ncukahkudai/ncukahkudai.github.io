@@ -2,7 +2,7 @@
 <html lang="id"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://server.arcgisonline.com; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.ggpht.com https://*.googleusercontent.com blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' blob: data: https://server.arcgisonline.com https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com; connect-src 'self' https://*.googleapis.com https://*.google.com https://*.gstatic.com data: blob:; frame-src https://*.google.com; manifest-src 'self'; worker-src 'self' blob:; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#d9531a">
 <link rel="manifest" href="manifest.webmanifest">
@@ -123,11 +123,18 @@
     <h2>Atur titik</h2>
     <button class="btn" id="mapCancel">Batal</button>
   </div></div>
-  <div class="map-wrap"><div id="map"></div><div class="crosshair" aria-hidden="true"></div></div>
-  <div class="map-bar"><div class="wrap">
+  <div class="wrap gm-key" id="gmKeyPanel" hidden>
+    <p><b>Citra Google Satellite memerlukan Google Maps API key milik Anda.</b> Buat di Google Cloud Console: aktifkan <i>Maps JavaScript API</i>, buat API key, lalu batasi key itu ke situs <code>ncukahkudai.github.io</code>. Key hanya tersimpan di HP ini.</p>
+    <label class="f">Google Maps API key<input id="gmKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AIza…"></label>
+    <p class="note err" id="gmErr" hidden></p>
+    <div class="row"><button class="btn primary" id="gmSave">Simpan &amp; buka peta</button><button class="btn" id="useEsri">Pakai citra Esri sementara</button></div>
+  </div>
+  <div class="map-wrap" id="mapWrap"><div id="map"></div><div class="crosshair" aria-hidden="true"></div></div>
+  <div class="map-bar" id="mapBar"><div class="wrap">
     <p class="note">Geser peta sampai tanda bidik tepat di atas objek. Titik oranye = posisi sekarang, biru = GPS Anda.</p>
     <div class="map-read" id="mapRead"></div>
     <div class="row"><button class="btn" id="mapGps">Ke posisi GPS saya</button><button class="btn primary" id="mapUse">Pakai titik ini</button></div>
+    <button class="linkish" id="gmChange">Ganti Google Maps API key</button>
   </div></div>
 </div>
 

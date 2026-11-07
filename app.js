@@ -1,7 +1,7 @@
 // Show script errors on screen so a screenshot tells what went wrong.
 window.addEventListener('error', e => {
   const m = document.querySelector('main'); if (!m) return;
-  const d = document.createElement('div'); d.className = 'err';
+  const d = document.createElement('div'); d.className = 'err-banner';
   d.textContent = 'Error: ' + (e.message || 'tidak diketahui') + (e.lineno ? ' (baris ' + e.lineno + ')' : '');
   m.prepend(d);
 });
@@ -12,7 +12,33 @@ const fmtTime = t => { const d = new Date(t); return `${pad(d.getDate())}/${pad(
 const fmtCoord = it => it.lat == null ? 'Tanpa koordinat' : `${it.lat.toFixed(6)}, ${it.lon.toFixed(6)}`;
 const SRC = { gps: 'GPS', exif: 'Data foto', manual: 'Manual', map: 'Peta satelit' };
 const fmtDate = t => { const d = new Date(t); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`; };
-const fmtAlt = it => it.alt != null ? `${Math.round(it.alt)} m` : '–';
+// Phone GPS reports height above the WGS 84 ellipsoid. Height above sea level (mdpl) = that minus the
+// EGM96 geoid height (NGA model; geoid.bin holds a 1° world grid plus a 1/4° grid for lat 15..-20, lon 90..150).
+// Heights read from a photo's EXIF are already above sea level (altMsl).
+let geoidP = null, geoid = null;
+function loadGeoid() {
+  return geoidP ??= fetch('geoid.bin').then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status)))
+    .then(b => { geoid = new DataView(b); }).catch(() => { geoidP = null; });
+}
+function geoidHeight(lat, lon) {
+  if (!geoid) return null;
+  lon = ((lon % 360) + 360) % 360;
+  const region = lat >= -20 && lat <= 15 && lon >= 90 && lon <= 150, G = 181 * 360;
+  const [y, x, rows, cols, get] = region
+    ? [(15 - lat) * 4, (lon - 90) * 4, 141, 241, (r, c) => geoid.getInt16((G + r * 241 + c) * 2) / 100]
+    : [90 - lat, lon, 181, 360, (r, c) => geoid.getInt16((r * 360 + (c % 360)) * 2) / 100];
+  const r0 = Math.min(Math.floor(y), rows - 2), c0 = Math.min(Math.floor(x), region ? cols - 2 : cols - 1), fy = y - r0, fx = x - c0;
+  const top = get(r0, c0) + (get(r0, c0 + 1) - get(r0, c0)) * fx, bottom = get(r0 + 1, c0) + (get(r0 + 1, c0 + 1) - get(r0 + 1, c0)) * fx;
+  return top + (bottom - top) * fy;
+}
+function mslAlt(it) {
+  if (it.alt == null) return null;
+  if (it.altMsl) return it.alt;
+  const n = it.lat != null ? geoidHeight(it.lat, it.lon) : null;
+  return n == null ? null : it.alt - n;
+}
+const fmtAlt = it => { const h = mslAlt(it); return h != null ? `${Math.round(h)} mdpl` : '– mdpl'; };
+loadGeoid().then(() => { if (cur) syncSheet(); });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
 let toastT;
@@ -173,6 +199,7 @@ async function normalize(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 async function stamped(it) {
+  await loadGeoid();
   const url = URL.createObjectURL(it.blob);
   try {
     const img = await loadImg(url);
@@ -180,7 +207,7 @@ async function stamped(it) {
     const g = c.getContext('2d'); g.drawImage(img, 0, 0);
     const fs = Math.max(11, Math.round(Math.min(c.width, c.height) * 0.02));
     const lines = [fmtCoord(it) + (it.acc ? `  ±${Math.round(it.acc)} m` : ''),
-      `Tinggi ${fmtAlt(it)}  ·  Tgl survey ${fmtDate(it.time)} ${new Date(it.time).toTimeString().slice(0, 5)}`];
+      `${fmtAlt(it)}  ·  Tgl survey ${fmtDate(it.time)} ${new Date(it.time).toTimeString().slice(0, 5)}`];
     if (it.title) lines.push(it.title);
     g.font = `500 ${fs}px "JetBrains Mono", ui-monospace, Menlo, monospace`;
     const padX = fs * 0.6, lh = fs * 1.3, m = fs * 0.7;
@@ -207,7 +234,8 @@ async function withExif(blob, it) {
   if (it.lat != null) {
     gps = [[0x0000, 1, [2, 3, 0, 0]], [0x0001, 2, asc(it.lat < 0 ? 'S' : 'N')], [0x0002, 5, dms(it.lat)],
       [0x0003, 2, asc(it.lon < 0 ? 'W' : 'E')], [0x0004, 5, dms(it.lon)], [0x0012, 2, asc('WGS-84')]];
-    if (it.alt != null) gps.push([0x0005, 1, [it.alt < 0 ? 1 : 0]], [0x0006, 5, [[Math.round(Math.abs(it.alt) * 100), 100]]]);
+    const h = mslAlt(it);
+    if (h != null) gps.push([0x0005, 1, [h < 0 ? 1 : 0]], [0x0006, 5, [[Math.round(Math.abs(h) * 100), 100]]]);
     if (it.acc) gps.push([0x001f, 5, [[Math.round(it.acc * 100), 100]]]);
     ifd0.push([0x8825, 4, 'gps']);
   }
@@ -330,9 +358,9 @@ async function addFiles(files, fromCamera) {
         if (!live && Date.now() - fix.time < 20000) live = fix;
         $('toast').hidden = true;
       }
-      if (live) Object.assign(it, { lat: live.lat, lon: live.lon, acc: live.acc, spread: live.spread ?? null, alt: live.alt, n: live.n || 1, src: 'gps' });
+      if (live) Object.assign(it, { lat: live.lat, lon: live.lon, acc: live.acc, spread: live.spread ?? null, alt: live.alt, altMsl: false, n: live.n || 1, src: 'gps' });
       if (fromCamera) it.toGallery = true;
-      else if (ex.lat != null) Object.assign(it, { lat: ex.lat, lon: ex.lon, alt: ex.alt ?? null, src: 'exif' });
+      else if (ex.lat != null) Object.assign(it, { lat: ex.lat, lon: ex.lon, alt: ex.alt ?? null, altMsl: ex.alt != null, src: 'exif' });
       if (fromCamera) it.time = Date.now();
       if (it.lat == null) noLoc++;
       await put(it); items.unshift(it); added++;
@@ -349,14 +377,14 @@ $('galIn').addEventListener('change', e => { addFiles([...e.target.files], false
 /* ---------- editor ---------- */
 let cur = null, saveT;
 function syncSheet() {
-  $('sStamp').textContent = fmtCoord(cur) + (cur.acc ? `  ±${Math.round(cur.acc)} m` : '') + `  ·  tinggi ${fmtAlt(cur)}  ·  ${fmtTime(cur.time)}`;
+  $('sStamp').textContent = fmtCoord(cur) + (cur.acc ? `  ±${Math.round(cur.acc)} m` : '') + `  ·  ${fmtAlt(cur)}  ·  ${fmtTime(cur.time)}`;
   $('sStamp').classList.toggle('none', cur.lat == null);
   const has = cur.lat != null;
   for (const [id, fn] of [['lnkEarth', earthUrl], ['lnkMaps', mapsUrl]]) {
     const a = $(id); if (has) a.href = fn(cur); else a.removeAttribute('href'); a.classList.toggle('busy', !has);
   }
   $('coordNote').className = 'note';
-  $('coordNote').textContent = has ? `Sumber: ${SRC[cur.src] || '-'}${cur.acc ? ` · akurasi ±${Math.round(cur.acc)} m` : ''}${cur.n > 1 ? ` · rata-rata ${cur.n} bacaan` : ''}${cur.spread != null && cur.n > 1 ? `, sebaran ${cur.spread.toFixed(1)} m` : ''} · tinggi ${fmtAlt(cur)}` : 'Foto ini belum punya lokasi. Isi koordinat (bisa ditempel dari Google Earth/Maps) atau tekan "Kunci presisi GPS".';
+  $('coordNote').textContent = has ? `Sumber: ${SRC[cur.src] || '-'}${cur.acc ? ` · akurasi ±${Math.round(cur.acc)} m` : ''}${cur.n > 1 ? ` · rata-rata ${cur.n} bacaan` : ''}${cur.spread != null && cur.n > 1 ? `, sebaran ${cur.spread.toFixed(1)} m` : ''} · ${fmtAlt(cur)}` : 'Foto ini belum punya lokasi. Isi koordinat (bisa ditempel dari Google Earth/Maps) atau tekan "Kunci presisi GPS".';
 }
 function openSheet(id) {
   cur = items.find(i => i.id === id); if (!cur) return;
@@ -388,7 +416,7 @@ $('useGps').addEventListener('click', async () => {
     btn.textContent = `Berhenti & pakai · ${n} bacaan ±${Math.round(avg.acc)} m, sebaran ${avg.spread.toFixed(1)} m`; } });
   lockCtl = null; btn.textContent = label;
   if (!a) { toast('Tidak ada bacaan GPS baru. Coba di tempat yang lebih terbuka.'); return; }
-  Object.assign(target, { lat: a.lat, lon: a.lon, acc: a.acc, spread: a.spread, alt: a.alt, n: a.n, src: 'gps' });
+  Object.assign(target, { lat: a.lat, lon: a.lon, acc: a.acc, spread: a.spread, alt: a.alt, altMsl: false, n: a.n, src: 'gps' });
   if (cur === target) { $('fCoord').value = fmtCoord(cur); syncSheet(); }
   put(target); toast(`Lokasi dikunci dari ${a.n} bacaan GPS (±${Math.round(a.acc)} m, sebaran ${a.spread.toFixed(1)} m).`, 5000);
 });
@@ -425,10 +453,13 @@ $('doneBtn').addEventListener('click', async () => {
 });
 
 /* ---------- fine-tune a point on satellite imagery ---------- */
-// Leaflet is part of the app; only the imagery tiles come from Esri (needs internet).
+// Google satellite imagery through the Maps JavaScript API with the owner's own key (Google's terms allow
+// its imagery only through its APIs). Esri imagery via Leaflet stays available as an explicit fallback.
+const GM_KEY = 'cl-gmkey';
+const getGmKey = () => { try { return localStorage.getItem(GM_KEY) || ''; } catch { return ''; } };
 const TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-let leafletP = null, map = null, mapTarget = null;
-const mapLayers = {};
+let leafletP = null, gmapsP = null, gProv = null, lProv = null, provider = null, useEsri = false, mapTarget = null;
+
 function loadLeaflet() {
   if (window.L) return Promise.resolve();
   return leafletP ??= new Promise((ok, no) => {
@@ -438,40 +469,114 @@ function loadLeaflet() {
     document.head.appendChild(js);
   });
 }
-function drawGps() {
-  if (!map || !fix || $('mapSheet').hidden) return;
-  const ll = [fix.lat, fix.lon];
-  if (!mapLayers.gps) {
-    mapLayers.acc = L.circle(ll, { radius: fix.acc, color: '#2b7de9', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
-    mapLayers.gps = L.circleMarker(ll, { radius: 6, color: '#fff', weight: 2, fillColor: '#2b7de9', fillOpacity: 1, interactive: false }).addTo(map);
-  } else { mapLayers.gps.setLatLng(ll); mapLayers.acc.setLatLng(ll).setRadius(fix.acc); }
+function loadGoogleMaps(key) {
+  if (window.google?.maps?.Map) return Promise.resolve();
+  return gmapsP ??= new Promise((ok, no) => {
+    window.__gmReady = ok;
+    const js = document.createElement('script');
+    js.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=__gmReady`;
+    js.async = true; js.onerror = () => { gmapsP = null; no(new Error('Google Maps tidak termuat. Periksa koneksi internet.')); };
+    document.head.appendChild(js);
+  });
 }
-function showMapCenter() { const c = map.getCenter(); $('mapRead').textContent = `${c.lat.toFixed(7)}, ${c.lng.toFixed(7)}  ·  zoom ${map.getZoom()}`; }
-$('mapBtn').hidden = onClaude;
-$('mapBtn').addEventListener('click', async () => {
-  try { await loadLeaflet(); } catch { toast('Peta belum bisa dimuat. Periksa koneksi internet.'); return; }
-  mapTarget = cur;
-  $('mapSheet').hidden = false;
-  const has = cur.lat != null, start = has ? [cur.lat, cur.lon] : fix ? [fix.lat, fix.lon] : [-2.5, 118];
-  if (!map) {
-    map = L.map('map', { maxZoom: 22, zoomSnap: 0.5 });
-    L.tileLayer(TILES, { maxZoom: 22, maxNativeZoom: 19, attribution: 'Citra © Esri, Maxar, Earthstar Geographics' }).addTo(map);
-    map.on('move', showMapCenter);
-  }
-  map.invalidateSize();
-  map.setView(start, has || fix ? 20 : 5, { animate: false });
-  mapLayers.orig?.remove();
-  mapLayers.orig = has ? L.circleMarker(start, { radius: 6, color: '#fff', weight: 2, fillColor: '#d9531a', fillOpacity: 1, interactive: false }).addTo(map) : null;
+// Google calls this when it rejects the key (wrong key, API not enabled, or site not allowed for the key).
+window.gm_authFailure = () => {
+  gProv = null; provider = null;
+  showKeyPanel('Google menolak API key ini. Pastikan Maps JavaScript API aktif, penagihan (billing) aktif, dan key diizinkan untuk ncukahkudai.github.io.');
+};
+
+function mapHost(name) {
+  let el = document.getElementById('map-' + name);
+  if (!el) { el = document.createElement('div'); el.id = 'map-' + name; el.className = 'map-host'; $('map').appendChild(el); }
+  [...$('map').children].forEach(c => { c.hidden = c !== el; });
+  return el;
+}
+async function googleProvider(key) {
+  await loadGoogleMaps(key);
+  const m = new google.maps.Map(mapHost('google'), { center: { lat: 0, lng: 0 }, zoom: 3, mapTypeId: 'satellite', tilt: 0, heading: 0,
+    disableDefaultUI: true, zoomControl: true, scaleControl: true, gestureHandling: 'greedy', clickableIcons: false, keyboardShortcuts: false });
+  const dot = color => ({ path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 });
+  const lay = {};
+  return {
+    name: 'google', show: () => mapHost('google'), resize: () => {},
+    setView: (lat, lon, z) => { m.setCenter({ lat, lng: lon }); m.setZoom(Math.round(z)); },
+    center: () => { const c = m.getCenter(); return { lat: c.lat(), lon: c.lng() }; },
+    zoom: () => m.getZoom(),
+    onMove: f => m.addListener('center_changed', f),
+    setOrig: p => { lay.orig?.setMap(null); lay.orig = p ? new google.maps.Marker({ map: m, position: { lat: p.lat, lng: p.lon }, icon: dot('#d9531a'), clickable: false }) : null; },
+    setGps: f => {
+      const pos = { lat: f.lat, lng: f.lon };
+      if (!lay.gps) {
+        lay.acc = new google.maps.Circle({ map: m, center: pos, radius: f.acc, strokeColor: '#2b7de9', strokeWeight: 1, fillColor: '#2b7de9', fillOpacity: 0.12, clickable: false });
+        lay.gps = new google.maps.Marker({ map: m, position: pos, icon: dot('#2b7de9'), clickable: false });
+      } else { lay.gps.setPosition(pos); lay.acc.setCenter(pos); lay.acc.setRadius(f.acc); }
+    },
+  };
+}
+async function leafletProvider() {
+  await loadLeaflet();
+  const m = L.map(mapHost('esri'), { maxZoom: 22, zoomSnap: 0.5 });
+  L.tileLayer(TILES, { maxZoom: 22, maxNativeZoom: 19, attribution: 'Citra © Esri, Maxar, Earthstar Geographics' }).addTo(m);
+  const lay = {};
+  return {
+    name: 'esri', show: () => mapHost('esri'), resize: () => m.invalidateSize(),
+    setView: (lat, lon, z) => m.setView([lat, lon], z, { animate: false }),
+    center: () => { const c = m.getCenter(); return { lat: c.lat, lon: c.lng }; },
+    zoom: () => m.getZoom(),
+    onMove: f => m.on('move', f),
+    setOrig: p => { lay.orig?.remove(); lay.orig = p ? L.circleMarker([p.lat, p.lon], { radius: 6, color: '#fff', weight: 2, fillColor: '#d9531a', fillOpacity: 1, interactive: false }).addTo(m) : null; },
+    setGps: f => {
+      const ll = [f.lat, f.lon];
+      if (!lay.gps) {
+        lay.acc = L.circle(ll, { radius: f.acc, color: '#2b7de9', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(m);
+        lay.gps = L.circleMarker(ll, { radius: 6, color: '#fff', weight: 2, fillColor: '#2b7de9', fillOpacity: 1, interactive: false }).addTo(m);
+      } else { lay.gps.setLatLng(ll); lay.acc.setLatLng(ll).setRadius(f.acc); }
+    },
+  };
+}
+
+function showKeyPanel(error) {
+  $('gmKeyPanel').hidden = false; $('mapWrap').hidden = true; $('mapBar').hidden = true;
+  $('gmKey').value = getGmKey();
+  $('gmErr').hidden = !error; $('gmErr').textContent = error || '';
+}
+function drawGps() { if (provider && fix && !$('mapSheet').hidden && !$('mapWrap').hidden) provider.setGps(fix); }
+function showMapCenter() { const c = provider.center(); $('mapRead').textContent = `${c.lat.toFixed(7)}, ${c.lon.toFixed(7)}  ·  zoom ${provider.zoom()}`; }
+async function showMap() {
+  const key = getGmKey();
+  if (!key && !useEsri) { showKeyPanel(); return; }
+  $('gmKeyPanel').hidden = true; $('mapWrap').hidden = false; $('mapBar').hidden = false;
+  $('gmChange').hidden = useEsri;
+  try {
+    if (useEsri) provider = lProv ??= await leafletProvider().then(p => { p.onMove(showMapCenter); return p; });
+    else provider = gProv ??= await googleProvider(key).then(p => { p.onMove(showMapCenter); return p; });
+  } catch (e) { showKeyPanel(e.message); return; }
+  provider.show(); provider.resize();
+  const t = mapTarget, has = t.lat != null;
+  const start = has ? t : fix || { lat: -2.5, lon: 118 };
+  provider.setView(start.lat, start.lon, has || fix ? 20 : 5);
+  provider.setOrig(has ? t : null);
   drawGps(); showMapCenter();
+}
+$('mapBtn').hidden = onClaude;
+$('mapBtn').addEventListener('click', () => { mapTarget = cur; $('mapSheet').hidden = false; showMap(); });
+$('gmSave').addEventListener('click', () => {
+  const key = $('gmKey').value.trim();
+  if (!/^[A-Za-z0-9_-]{20,}$/.test(key)) { showKeyPanel('Format API key tidak dikenali. Key Google biasanya diawali "AIza".'); return; }
+  try { localStorage.setItem(GM_KEY, key); } catch {}
+  if (gProv || gmapsP) { location.reload(); return; }   // a new key needs a fresh Google Maps load
+  useEsri = false; showMap();
 });
+$('useEsri').addEventListener('click', () => { useEsri = true; showMap(); });
+$('gmChange').addEventListener('click', () => showKeyPanel());
 $('mapCancel').addEventListener('click', () => { $('mapSheet').hidden = true; });
 $('mapGps').addEventListener('click', () => {
   if (!fix) { toast('GPS belum mendapat posisi.'); return; }
-  map.setView([fix.lat, fix.lon], Math.max(map.getZoom(), 19));
+  provider.setView(fix.lat, fix.lon, Math.max(provider.zoom(), 19));
 });
 $('mapUse').addEventListener('click', () => {
-  const c = map.getCenter(), t = mapTarget;
-  Object.assign(t, { lat: c.lat, lon: c.lng, acc: null, spread: null, n: 0, src: 'map' });
+  const c = provider.center(), t = mapTarget;
+  Object.assign(t, { lat: c.lat, lon: c.lon, acc: null, spread: null, n: 0, src: 'map' });
   put(t); $('mapSheet').hidden = true;
   if (cur === t) { $('fCoord').value = fmtCoord(t); syncSheet(); }
   toast('Titik disesuaikan di peta satelit.');
@@ -537,7 +642,7 @@ function exportRows(pts) {
   return pts.map((it, i) => {
     const u = toUTM(it.lat, it.lon);
     return { no: i + 1, judul: it.title || 'Foto ' + (i + 1), catatan: it.note || '', lat: it.lat, lon: it.lon,
-      zona: u.zone, utmX: u.x, utmY: u.y, akurasi: it.acc ?? null, elevasi: it.alt ?? null,
+      zona: u.zone, utmX: u.x, utmY: u.y, akurasi: it.acc ?? null, elevasi: mslAlt(it),
       waktu: localStamp(it.time), sumber: SRC[it.src] || '', foto: photoName(i) };
   });
 }
@@ -566,7 +671,7 @@ async function buildKmz(pts, name) {
 <img src="files/${fn}" width="500"><br>
 <b style="font-size:15px">${esc(title)}</b><br>
 ${esc(it.note).replace(/\n/g, '<br>')}<br><br>
-<small>${fmtCoord(it)}${it.acc ? ' ±' + Math.round(it.acc) + ' m' : ''} · ${fmtTime(it.time)} · sumber: ${SRC[it.src] || '-'}</small></div>`;
+<small>${fmtCoord(it)}${it.acc ? ' ±' + Math.round(it.acc) + ' m' : ''} · ${fmtAlt(it)} · ${fmtTime(it.time)} · sumber: ${SRC[it.src] || '-'}</small></div>`;
     pm += `
     <Placemark>
       <name>${esc(title)}</name>
@@ -605,7 +710,7 @@ ${esc(it.note).replace(/\n/g, '<br>')}<br><br>
 
 function buildCsv(rows) {
   const q = v => { v = v == null ? '' : String(v); return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-  const head = ['no', 'judul', 'catatan', 'lintang', 'bujur', 'utm_zona', 'utm_x', 'utm_y', 'akurasi_m', 'elevasi_m', 'waktu', 'sumber', 'foto'];
+  const head = ['no', 'judul', 'catatan', 'lintang', 'bujur', 'utm_zona', 'utm_x', 'utm_y', 'akurasi_m', 'elevasi_mdpl', 'waktu', 'sumber', 'foto'];
   const lines = rows.map(r => [r.no, r.judul, r.catatan, r.lat.toFixed(7), r.lon.toFixed(7), r.zona, r.utmX.toFixed(2), r.utmY.toFixed(2),
     r.akurasi != null ? r.akurasi.toFixed(1) : '', r.elevasi != null ? r.elevasi.toFixed(1) : '', r.waktu, r.sumber, r.foto].map(q).join(','));
   return '\ufeff' + [head.join(','), ...lines].join('\r\n') + '\r\n';  // BOM so Excel reads UTF-8
@@ -617,12 +722,12 @@ function buildGeoJson(rows, withPhotos) {
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [r1(r.lon, 8), r1(r.lat, 8)] },
     properties: { no: r.no, judul: r.judul, catatan: r.catatan, utm_zona: r.zona, utm_x: r1(r.utmX, 2), utm_y: r1(r.utmY, 2),
-      akurasi_m: r1(r.akurasi, 1), elevasi_m: r1(r.elevasi, 1), waktu: r.waktu, sumber: r.sumber, foto: withPhotos ? 'foto/' + r.foto : null }
+      akurasi_m: r1(r.akurasi, 1), elevasi_mdpl: r1(r.elevasi, 1), waktu: r.waktu, sumber: r.sumber, foto: withPhotos ? 'foto/' + r.foto : null }
   })) }, null, 2);
 }
 
 function buildGpx(rows, pts, name) {
-  const wpt = rows.map((r, i) => `  <wpt lat="${r.lat.toFixed(8)}" lon="${r.lon.toFixed(8)}">${pts[i].alt != null ? `<ele>${pts[i].alt.toFixed(1)}</ele>` : ''}`
+  const wpt = rows.map((r, i) => `  <wpt lat="${r.lat.toFixed(8)}" lon="${r.lon.toFixed(8)}">${rows[i].elevasi != null ? `<ele>${rows[i].elevasi.toFixed(1)}</ele>` : ''}`
     + `<time>${new Date(pts[i].time).toISOString()}</time><name>${esc(r.judul)}</name><desc>${esc(r.catatan)}</desc><sym>Flag, Blue</sym></wpt>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Catatan Lapangan" xmlns="http://www.topografix.com/GPX/1/1">
@@ -653,7 +758,7 @@ function buildShapefile(rows) {
 }
 function buildDbf(rows) {
   const F = [['NO', 'N', 5, 0], ['JUDUL', 'C', 100, 0], ['CATATAN', 'C', 254, 0], ['LINTANG', 'N', 13, 8], ['BUJUR', 'N', 13, 8],
-    ['UTM_ZONA', 'C', 4, 0], ['UTM_X', 'N', 12, 2], ['UTM_Y', 'N', 12, 2], ['AKURASI_M', 'N', 7, 1], ['ELEVASI_M', 'N', 8, 1],
+    ['UTM_ZONA', 'C', 4, 0], ['UTM_X', 'N', 12, 2], ['UTM_Y', 'N', 12, 2], ['AKURASI_M', 'N', 7, 1], ['MDPL', 'N', 8, 1],
     ['WAKTU', 'C', 19, 0], ['SUMBER', 'C', 10, 0], ['FOTO', 'C', 40, 0]];
   const enc = new TextEncoder();
   const recLen = 1 + F.reduce((t, f) => t + f[2], 0), headLen = 32 + 32 * F.length + 1;
@@ -727,6 +832,7 @@ $('exportBtn').addEventListener('click', () => {
 $('exportClose').addEventListener('click', () => { $('exportSheet').hidden = true; });
 document.querySelectorAll('.fmt').forEach(btn => btn.addEventListener('click', async () => {
   const pts = exportPoints(); if (!pts.length) return;
+  await loadGeoid();
   if (!window.JSZip) { toast('Pustaka ekspor belum termuat. Periksa koneksi internet lalu coba lagi.'); return; }
   const list = $('exportSheet').querySelector('.fmt-list'); list.classList.add('busy');
   toast('Menyiapkan file…', 20000);

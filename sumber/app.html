@@ -295,6 +295,13 @@ function mslAlt(it) {
   return n == null ? null : it.alt - n;
 }
 const fmtAlt = it => { const h = mslAlt(it); return h != null ? `${Math.round(h)} mdpl` : '– mdpl'; };
+// Shown in the photo details so the reading can be checked against a GPS receiver.
+function altDetail(it) {
+  if (it.alt == null) return '';
+  if (it.altMsl) return ` (dari data foto)`;
+  const n = it.lat != null ? geoidHeight(it.lat, it.lon) : null;
+  return ` (GPS mentah ${Math.round(it.alt)} m, koreksi geoid ${n == null ? '?' : (n >= 0 ? '−' : '+') + Math.abs(n).toFixed(1)} m)`;
+}
 loadGeoid().then(() => { if (cur) syncSheet(); });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
@@ -641,7 +648,7 @@ function syncSheet() {
     const a = $(id); if (has) a.href = fn(cur); else a.removeAttribute('href'); a.classList.toggle('busy', !has);
   }
   $('coordNote').className = 'note';
-  $('coordNote').textContent = has ? `Sumber: ${SRC[cur.src] || '-'}${cur.acc ? ` · akurasi ±${Math.round(cur.acc)} m` : ''}${cur.n > 1 ? ` · rata-rata ${cur.n} bacaan` : ''}${cur.spread != null && cur.n > 1 ? `, sebaran ${cur.spread.toFixed(1)} m` : ''} · ${fmtAlt(cur)}` : 'Foto ini belum punya lokasi. Isi koordinat (bisa ditempel dari Google Earth/Maps) atau tekan "Kunci presisi GPS".';
+  $('coordNote').textContent = has ? `Sumber: ${SRC[cur.src] || '-'}${cur.acc ? ` · akurasi ±${Math.round(cur.acc)} m` : ''}${cur.n > 1 ? ` · rata-rata ${cur.n} bacaan` : ''}${cur.spread != null && cur.n > 1 ? `, sebaran ${cur.spread.toFixed(1)} m` : ''} · ${fmtAlt(cur)}${altDetail(cur)}` : 'Foto ini belum punya lokasi. Isi koordinat (bisa ditempel dari Google Earth/Maps) atau tekan "Kunci presisi GPS".';
 }
 function openSheet(id) {
   cur = items.find(i => i.id === id); if (!cur) return;
